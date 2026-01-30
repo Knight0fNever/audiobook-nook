@@ -1,0 +1,37 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export const config = {
+  port: parseInt(process.env.PORT || '3000', 10),
+  nodeEnv: process.env.NODE_ENV || 'development',
+
+  jwt: {
+    secret: process.env.JWT_SECRET || 'default-dev-secret-change-in-production',
+    expiresIn: '7d'
+  },
+
+  library: {
+    path: process.env.LIBRARY_PATH || path.join(__dirname, '../../../audiobooks')
+  },
+
+  database: {
+    path: process.env.DATABASE_PATH || path.join(__dirname, '../../data/database.sqlite')
+  },
+
+  covers: {
+    path: path.join(__dirname, '../../data/covers')
+  },
+
+  openlibrary: {
+    enabled: process.env.OPENLIBRARY_ENABLED === 'true',
+    baseUrl: 'https://openlibrary.org'
+  }
+};
+
+export default config;
