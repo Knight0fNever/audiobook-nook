@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDb } from '../../database/init.js';
 import { extractMetadata, extractCoverArt } from '../metadata/index.js';
+import { enrichBookMetadata, updateBookWithEnrichedData } from '../metadata/apiEnrichment.js';
 import { config } from '../../config/index.js';
 
 // Scan status tracking
@@ -16,6 +17,13 @@ let scanStatus = {
     added: 0,
     updated: 0,
     removed: 0
+  },
+  enrichment: {
+    enabled: false,
+    progress: 0,
+    total: 0,
+    succeeded: 0,
+    failed: 0
   }
 };
 
@@ -38,6 +46,10 @@ export async function scanLibrary() {
     throw new Error(`Library path does not exist: ${libraryPath}`);
   }
 
+  // Check if enrichment is enabled
+  const enrichmentEnabled = db.prepare("SELECT value FROM settings WHERE key = 'api_enrichment_enabled'").get();
+  const shouldEnrich = enrichmentEnabled?.value === 'true';
+
   // Reset scan status
   scanStatus = {
     scanning: true,
@@ -50,6 +62,13 @@ export async function scanLibrary() {
       added: 0,
       updated: 0,
       removed: 0
+    },
+    enrichment: {
+      enabled: shouldEnrich,
+      progress: 0,
+      total: 0,
+      succeeded: 0,
+      failed: 0
     }
   };
 
@@ -57,8 +76,12 @@ export async function scanLibrary() {
     // Find all book folders (Author/BookTitle structure)
     const bookFolders = findBookFolders(libraryPath);
     scanStatus.total = bookFolders.length;
+    scanStatus.enrichment.total = shouldEnrich ? bookFolders.length : 0;
 
     console.log(`Found ${bookFolders.length} potential audiobook folders`);
+    if (shouldEnrich) {
+      console.log('API metadata enrichment is enabled');
+    }
 
     // Track existing books for removal detection
     const existingBooks = new Set(
@@ -72,7 +95,7 @@ export async function scanLibrary() {
       scanStatus.current = path.basename(folderPath);
 
       try {
-        await processBookFolder(db, folderPath, existingBooks);
+        await processBookFolder(db, folderPath, existingBooks, shouldEnrich);
       } catch (error) {
         console.error(`Error processing ${folderPath}:`, error.message);
         scanStatus.errors.push({
@@ -140,7 +163,7 @@ function hasAudioFiles(folderPath) {
   }
 }
 
-async function processBookFolder(db, folderPath, existingBooks) {
+async function processBookFolder(db, folderPath, existingBooks, shouldEnrich = false) {
   const audioFiles = fs.readdirSync(folderPath)
     .filter(f => AUDIO_EXTENSIONS.includes(path.extname(f).toLowerCase()))
     .sort(naturalSort);
@@ -271,6 +294,28 @@ async function processBookFolder(db, folderPath, existingBooks) {
     const coverPath = await extractCoverArt(folderPath, audioFiles[0], bookId);
     if (coverPath) {
       db.prepare('UPDATE books SET cover_path = ? WHERE id = ?').run(coverPath, bookId);
+    }
+  }
+
+  // Enrich metadata with API data if enabled
+  if (shouldEnrich) {
+    try {
+      scanStatus.enrichment.progress++;
+      console.log(`  Enriching metadata (${scanStatus.enrichment.progress}/${scanStatus.enrichment.total})`);
+
+      const enrichedData = await enrichBookMetadata(book, metadata);
+      if (enrichedData) {
+        await updateBookWithEnrichedData(bookId, enrichedData);
+        scanStatus.enrichment.succeeded++;
+        console.log(`  Enriched from ${enrichedData.source}`);
+      } else {
+        scanStatus.enrichment.failed++;
+        console.log(`  No API metadata found`);
+      }
+    } catch (error) {
+      scanStatus.enrichment.failed++;
+      console.error(`  Enrichment error:`, error.message);
+      // Don't throw - enrichment failure shouldn't stop scanning
     }
   }
 }

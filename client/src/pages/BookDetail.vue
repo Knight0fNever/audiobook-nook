@@ -3,19 +3,24 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../services/api'
 import { usePlayerStore } from '../stores/player'
+import { useAuthStore } from '../stores/auth'
 import Button from 'primevue/button'
 import ProgressBar from 'primevue/progressbar'
 import Tag from 'primevue/tag'
 import Skeleton from 'primevue/skeleton'
 import Divider from 'primevue/divider'
+import { useToast } from 'primevue/usetoast'
 
 const route = useRoute()
 const router = useRouter()
 const playerStore = usePlayerStore()
+const authStore = useAuthStore()
+const toast = useToast()
 
 const book = ref(null)
 const chapters = ref([])
 const loading = ref(true)
+const enriching = ref(false)
 
 const isCurrentBook = computed(() => playerStore.currentBook?.id === book.value?.id)
 
@@ -64,6 +69,49 @@ function formatChapterTime(seconds) {
   const secs = Math.floor(seconds % 60)
   return `${minutes}:${secs.toString().padStart(2, '0')}`
 }
+
+async function enrichMetadata() {
+  if (!authStore.isAdmin) return
+
+  enriching.value = true
+  try {
+    const result = await api.enrichBookMetadata(route.params.id)
+    if (result.success) {
+      // Reload the book from the proper endpoint to get formatted data
+      book.value = await api.getBook(route.params.id)
+
+      toast.add({
+        severity: 'success',
+        summary: 'Metadata Enriched',
+        detail: `Successfully enriched from ${result.source}`,
+        life: 3000
+      })
+    } else {
+      toast.add({
+        severity: 'info',
+        summary: 'No Metadata Found',
+        detail: 'Could not find metadata from APIs',
+        life: 3000
+      })
+    }
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: 'Enrichment Failed',
+      detail: error.message || 'Failed to enrich metadata',
+      life: 3000
+    })
+  } finally {
+    enriching.value = false
+  }
+}
+
+function getMetadataSourceSeverity(source) {
+  if (!source) return 'secondary'
+  if (source === 'openlibrary') return 'success'
+  if (source === 'googlebooks') return 'info'
+  return 'secondary'
+}
 </script>
 
 <template>
@@ -104,6 +152,7 @@ function formatChapterTime(seconds) {
 
           <div class="book-meta">
             <Tag v-if="book.series_name" :value="book.series_name" severity="info" />
+            <Tag v-if="book.metadata_source" :value="book.metadata_source" :severity="getMetadataSourceSeverity(book.metadata_source)" />
             <span class="meta-item">
               <i class="pi pi-clock"></i>
               {{ formatDuration(book.duration_seconds) }}
@@ -115,6 +164,14 @@ function formatChapterTime(seconds) {
             <span v-if="book.genre" class="meta-item">
               <i class="pi pi-tag"></i>
               {{ book.genre }}
+            </span>
+            <span v-if="book.isbn" class="meta-item">
+              <i class="pi pi-book"></i>
+              ISBN: {{ book.isbn }}
+            </span>
+            <span v-if="book.publisher" class="meta-item">
+              <i class="pi pi-building"></i>
+              {{ book.publisher }}
             </span>
           </div>
 
@@ -157,14 +214,32 @@ function formatChapterTime(seconds) {
               severity="secondary"
               @click="openFullPlayer"
             />
+
+            <Button
+              v-if="authStore.isAdmin"
+              label="Enrich Metadata"
+              icon="pi pi-sync"
+              severity="secondary"
+              :loading="enriching"
+              @click="enrichMetadata"
+            />
           </div>
         </div>
       </div>
 
       <!-- Description -->
-      <div v-if="book.description" class="book-description">
+      <div v-if="book.api_description || book.description" class="book-description">
         <h2>Description</h2>
-        <p>{{ book.description }}</p>
+        <div v-if="book.api_description" class="description-section">
+          <p>{{ book.api_description }}</p>
+          <span v-if="book.metadata_source" class="description-source">
+            Source: {{ book.metadata_source }}
+          </span>
+        </div>
+        <div v-if="book.description && book.description !== book.api_description" class="description-section local-description">
+          <h3>Local Description</h3>
+          <p>{{ book.description }}</p>
+        </div>
       </div>
 
       <Divider />
@@ -326,6 +401,22 @@ function formatChapterTime(seconds) {
 .book-description p {
   color: var(--text-color-secondary);
   line-height: 1.6;
+}
+
+.description-section {
+  margin-bottom: 1rem;
+}
+
+.description-source {
+  font-size: 0.75rem;
+  color: var(--text-color-secondary);
+  font-style: italic;
+}
+
+.local-description h3 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  color: var(--text-color-secondary);
 }
 
 .chapters-section h2 {

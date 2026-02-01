@@ -53,8 +53,20 @@ npm run migrate         # Run database migrations
 **Key Services** (`server/src/services/`):
 - `scanner/index.js` - Library folder scanning, detects `Author/BookTitle` structure
 - `metadata/index.js` - Audio metadata extraction via `music-metadata` package
+- `metadata/apiEnrichment.js` - Open Library & Google Books API integration for metadata
+- `metadata/isbnExtractor.js` - ISBN extraction from filenames/folders/metadata
+- `metadata/apiCache.js` - Dual-layer caching (in-memory + SQLite) for API responses
 
 **Auth:** JWT tokens with Bearer header; also accepts `?token=` query param for audio streaming
+
+### API Metadata Enrichment
+- Automatic enrichment during library scans (when enabled in settings)
+- Manual enrichment via Admin → Book Detail → "Enrich Metadata" button
+- Batch enrichment via Admin → Library Management → "Enrich All Books"
+- ISBN extraction from folder patterns: `Author/Book [ISBN-9780123456789]/file.mp3`
+- API priority: Open Library (primary) → Google Books (fallback)
+- 30-day response caching to minimize API calls
+- New book fields: `isbn`, `publisher`, `api_description`, `api_cover_url`, `metadata_source`
 
 ### Frontend (Vue 3 Composition API)
 
@@ -81,6 +93,7 @@ npm run migrate         # Run database migrations
 - Extracts metadata from first audio file, falls back to folder names
 - Detects chapter titles vs book titles (ignores "Chapter 01 - ..." patterns for book title)
 - Supported formats: MP3, M4A, M4B
+- Optional API enrichment runs after book processing (non-blocking)
 
 ## Environment Configuration
 
@@ -88,7 +101,33 @@ Server config in `server/.env`:
 - `LIBRARY_PATH` - Path to audiobook folder
 - `JWT_SECRET` - Token signing secret
 - `DATABASE_PATH` - SQLite file location (default: `./data/database.sqlite`)
+- `GOOGLE_BOOKS_API_KEY` - Optional API key for higher rate limits
+- `API_ENRICHMENT_TIMEOUT` - API request timeout (default: 10000ms)
 
 ## Default Credentials
 
 Initial admin account: `admin` / `admin`
+
+## Development Notes
+
+### Windows-Specific Patterns
+- Use `path.basename()` for extracting filenames (handles both `/` and `\` separators)
+- Database paths use backslashes on Windows - normalize when constructing URLs
+- Cover URLs must use forward slashes: `/covers/filename.jpg`
+
+### Database Migrations
+- Migrations in `server/src/database/init.js` via `runMigrations()`
+- Version tracked with `pragma user_version`
+- Migrations run automatically on server startup
+- Use table introspection to avoid re-adding columns
+
+### Testing API Changes
+- Server restart required (no hot reload): `npm run dev`
+- Browser hard refresh needed after API changes: `Ctrl+Shift+R` (Windows) / `Cmd+Shift+R` (Mac)
+- Test endpoints: `curl http://localhost:3000/api/health`
+- Authentication: Use admin/admin credentials for testing
+
+### Static File Serving
+- `/covers` route serves `server/data/covers/` directory
+- API covers stored in `server/data/covers/api/` subdirectory
+- Vite dev proxy configured for `/covers` and `/api` routes

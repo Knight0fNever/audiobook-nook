@@ -307,6 +307,15 @@ function formatBook(book) {
     ? (book.position_seconds / book.duration_seconds) * 100
     : 0;
 
+  // Determine cover URL (prefer API cover if available, otherwise local cover)
+  let coverUrl = null;
+  if (book.api_cover_url) {
+    // API cover is stored in api subfolder
+    coverUrl = `/covers/api/${path.basename(book.api_cover_url)}`;
+  } else if (book.cover_path) {
+    coverUrl = `/covers/${path.basename(book.cover_path)}`;
+  }
+
   return {
     id: book.id,
     title: book.title,
@@ -320,7 +329,12 @@ function formatBook(book) {
     series_name: book.series_name || null,
     series_order: book.series_order,
     cover_path: book.cover_path,
-    cover_url: book.cover_path ? `/covers/${path.basename(book.cover_path)}` : null,
+    cover_url: coverUrl,
+    isbn: book.isbn || null,
+    publisher: book.publisher || null,
+    api_description: book.api_description || null,
+    metadata_source: book.metadata_source || null,
+    metadata_enriched_at: book.metadata_enriched_at || null,
     created_at: book.created_at,
     updated_at: book.updated_at,
     progress: {

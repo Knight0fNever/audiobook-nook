@@ -31,6 +31,12 @@ export const config = {
   openlibrary: {
     enabled: process.env.OPENLIBRARY_ENABLED === 'true',
     baseUrl: 'https://openlibrary.org'
+  },
+
+  api: {
+    googleBooksApiKey: process.env.GOOGLE_BOOKS_API_KEY || '',
+    enrichmentTimeout: parseInt(process.env.API_ENRICHMENT_TIMEOUT || '10000', 10),
+    rateLimitDelay: parseInt(process.env.API_ENRICHMENT_RATE_LIMIT_DELAY || '600', 10)
   }
 };
 

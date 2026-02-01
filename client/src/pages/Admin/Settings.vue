@@ -14,7 +14,11 @@ const toast = useToast()
 const settings = ref({
   library_path: '',
   scan_schedule: '',
-  openlibrary_enabled: false
+  openlibrary_enabled: false,
+  api_enrichment_enabled: true,
+  api_enrichment_prefer_api_covers: true,
+  api_enrichment_rate_limit_delay: '600',
+  google_books_api_key: ''
 })
 const loading = ref(true)
 const saving = ref(false)
@@ -25,7 +29,11 @@ onMounted(async () => {
     settings.value = {
       library_path: data.library_path || '',
       scan_schedule: data.scan_schedule || '',
-      openlibrary_enabled: data.openlibrary_enabled === 'true'
+      openlibrary_enabled: data.openlibrary_enabled === 'true',
+      api_enrichment_enabled: data.api_enrichment_enabled !== 'false',
+      api_enrichment_prefer_api_covers: data.api_enrichment_prefer_api_covers !== 'false',
+      api_enrichment_rate_limit_delay: data.api_enrichment_rate_limit_delay || '600',
+      google_books_api_key: data.google_books_api_key || ''
     }
   } catch (error) {
     console.error('Failed to load settings:', error)
@@ -41,7 +49,11 @@ async function saveSettings() {
     await api.updateSettings({
       library_path: settings.value.library_path,
       scan_schedule: settings.value.scan_schedule,
-      openlibrary_enabled: settings.value.openlibrary_enabled
+      openlibrary_enabled: settings.value.openlibrary_enabled,
+      api_enrichment_enabled: settings.value.api_enrichment_enabled,
+      api_enrichment_prefer_api_covers: settings.value.api_enrichment_prefer_api_covers,
+      api_enrichment_rate_limit_delay: settings.value.api_enrichment_rate_limit_delay,
+      google_books_api_key: settings.value.google_books_api_key
     })
 
     toast.add({
@@ -106,7 +118,58 @@ async function saveSettings() {
       </Card>
 
       <Card>
-        <template #title>Integrations</template>
+        <template #title>API Metadata Enrichment</template>
+        <template #content>
+          <div class="form-group inline">
+            <div class="switch-group">
+              <InputSwitch
+                v-model="settings.api_enrichment_enabled"
+                inputId="enrichment_enabled"
+              />
+              <label for="enrichment_enabled">Enable API Enrichment During Scan</label>
+            </div>
+            <small>Automatically enrich metadata using Open Library and Google Books APIs during library scans</small>
+          </div>
+
+          <div class="form-group inline">
+            <div class="switch-group">
+              <InputSwitch
+                v-model="settings.api_enrichment_prefer_api_covers"
+                inputId="prefer_api_covers"
+              />
+              <label for="prefer_api_covers">Prefer API Cover Images</label>
+            </div>
+            <small>Show API-provided covers instead of local covers when available</small>
+          </div>
+
+          <div class="form-group">
+            <label for="rate_limit_delay">Rate Limit Delay (ms)</label>
+            <InputText
+              id="rate_limit_delay"
+              v-model="settings.api_enrichment_rate_limit_delay"
+              class="w-full"
+              placeholder="600"
+              type="number"
+            />
+            <small>Delay between API requests in milliseconds (default: 600ms)</small>
+          </div>
+
+          <div class="form-group">
+            <label for="google_books_key">Google Books API Key (optional)</label>
+            <InputText
+              id="google_books_key"
+              v-model="settings.google_books_api_key"
+              class="w-full"
+              placeholder="Enter API key"
+              type="password"
+            />
+            <small>Optional API key for Google Books. Increases rate limits.</small>
+          </div>
+        </template>
+      </Card>
+
+      <Card>
+        <template #title>Legacy Integrations</template>
         <template #content>
           <div class="form-group inline">
             <div class="switch-group">
@@ -114,9 +177,9 @@ async function saveSettings() {
                 v-model="settings.openlibrary_enabled"
                 inputId="openlibrary"
               />
-              <label for="openlibrary">OpenLibrary Integration</label>
+              <label for="openlibrary">OpenLibrary Integration (Legacy)</label>
             </div>
-            <small>Fetch additional metadata and cover art from OpenLibrary (optional)</small>
+            <small>Old integration - use API Enrichment instead</small>
           </div>
         </template>
       </Card>

@@ -4,7 +4,12 @@ import { getDb } from '../database/init.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import { scanLibrary, getScanStatus } from '../services/scanner/index.js';
+import { enrichBookMetadata, updateBookWithEnrichedData } from '../services/metadata/apiEnrichment.js';
+import { clearCache, getCacheStats } from '../services/metadata/apiCache.js';
+import { extractMetadata } from '../services/metadata/index.js';
 import { config } from '../config/index.js';
+import path from 'path';
+import fs from 'fs';
 
 export const adminRouter = Router();
 
@@ -256,7 +261,15 @@ adminRouter.get('/settings', (req, res, next) => {
 adminRouter.put('/settings', (req, res, next) => {
   try {
     const db = getDb();
-    const { library_path, scan_schedule, openlibrary_enabled } = req.body;
+    const {
+      library_path,
+      scan_schedule,
+      openlibrary_enabled,
+      api_enrichment_enabled,
+      api_enrichment_prefer_api_covers,
+      api_enrichment_rate_limit_delay,
+      google_books_api_key
+    } = req.body;
 
     const updateSetting = db.prepare(`
       INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)
@@ -270,6 +283,18 @@ adminRouter.put('/settings', (req, res, next) => {
     }
     if (openlibrary_enabled !== undefined) {
       updateSetting.run('openlibrary_enabled', String(openlibrary_enabled));
+    }
+    if (api_enrichment_enabled !== undefined) {
+      updateSetting.run('api_enrichment_enabled', String(api_enrichment_enabled));
+    }
+    if (api_enrichment_prefer_api_covers !== undefined) {
+      updateSetting.run('api_enrichment_prefer_api_covers', String(api_enrichment_prefer_api_covers));
+    }
+    if (api_enrichment_rate_limit_delay !== undefined) {
+      updateSetting.run('api_enrichment_rate_limit_delay', String(api_enrichment_rate_limit_delay));
+    }
+    if (google_books_api_key !== undefined) {
+      updateSetting.run('google_books_api_key', google_books_api_key);
     }
 
     // Return updated settings
@@ -301,6 +326,145 @@ adminRouter.delete('/books/:id', (req, res, next) => {
     db.prepare('DELETE FROM books WHERE id = ?').run(id);
 
     res.json({ message: 'Book removed from library' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/admin/books/:id/enrich - Enrich single book metadata
+adminRouter.post('/books/:id/enrich', async (req, res, next) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+
+    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(id);
+    if (!book) {
+      throw new NotFoundError('Book not found');
+    }
+
+    // Get audio metadata from first chapter
+    const firstChapter = db.prepare(`
+      SELECT file_path FROM chapters WHERE book_id = ? ORDER BY order_index LIMIT 1
+    `).get(id);
+
+    let audioMetadata = null;
+    if (firstChapter && fs.existsSync(firstChapter.file_path)) {
+      audioMetadata = await extractMetadata(firstChapter.file_path);
+    }
+
+    // Enrich metadata
+    const enrichedData = await enrichBookMetadata(book, audioMetadata, { force: true, skipCache: false });
+
+    if (!enrichedData) {
+      return res.status(404).json({
+        success: false,
+        message: 'No metadata found from APIs'
+      });
+    }
+
+    // Update book with enriched data
+    const updatedBook = await updateBookWithEnrichedData(id, enrichedData);
+
+    // Determine which fields were enriched
+    const enrichedFields = [];
+    if (enrichedData.isbn) enrichedFields.push('isbn');
+    if (enrichedData.publisher) enrichedFields.push('publisher');
+    if (enrichedData.description) enrichedFields.push('api_description');
+    if (enrichedData.coverUrl) enrichedFields.push('api_cover_url');
+
+    res.json({
+      success: true,
+      book: updatedBook,
+      source: enrichedData.source,
+      enrichedFields
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/admin/books/batch-enrich - Enrich all books
+adminRouter.post('/books/batch-enrich', async (req, res, next) => {
+  try {
+    const db = getDb();
+
+    // Get all books
+    const books = db.prepare('SELECT * FROM books').all();
+
+    // Start enrichment in background
+    const enrichmentPromise = (async () => {
+      const results = {
+        total: books.length,
+        succeeded: 0,
+        failed: 0,
+        skipped: 0
+      };
+
+      for (const book of books) {
+        try {
+          // Skip if already enriched (unless force is requested)
+          if (book.metadata_enriched_at && !req.body.force) {
+            results.skipped++;
+            continue;
+          }
+
+          // Get audio metadata from first chapter
+          const firstChapter = db.prepare(`
+            SELECT file_path FROM chapters WHERE book_id = ? ORDER BY order_index LIMIT 1
+          `).get(book.id);
+
+          let audioMetadata = null;
+          if (firstChapter && fs.existsSync(firstChapter.file_path)) {
+            audioMetadata = await extractMetadata(firstChapter.file_path);
+          }
+
+          // Enrich metadata
+          const enrichedData = await enrichBookMetadata(book, audioMetadata, { force: true });
+
+          if (enrichedData) {
+            await updateBookWithEnrichedData(book.id, enrichedData);
+            results.succeeded++;
+            console.log(`Enriched: ${book.title} (${results.succeeded}/${books.length})`);
+          } else {
+            results.failed++;
+          }
+        } catch (error) {
+          console.error(`Error enriching ${book.title}:`, error.message);
+          results.failed++;
+        }
+      }
+
+      console.log('Batch enrichment complete:', results);
+      return results;
+    })();
+
+    // Don't await - let it run in background
+    enrichmentPromise.catch(err => console.error('Batch enrichment error:', err));
+
+    res.json({
+      message: 'Batch enrichment started',
+      total: books.length
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/admin/metadata/cache-stats - Get cache statistics
+adminRouter.get('/metadata/cache-stats', (req, res, next) => {
+  try {
+    const stats = getCacheStats();
+    res.json(stats);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /api/admin/metadata/cache - Clear metadata cache
+adminRouter.delete('/metadata/cache', (req, res, next) => {
+  try {
+    clearCache();
+    res.json({ message: 'Cache cleared successfully' });
   } catch (error) {
     next(error);
   }

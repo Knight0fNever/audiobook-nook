@@ -184,6 +184,22 @@ class ApiService {
   async deleteBook(id) {
     return this.request('DELETE', `/admin/books/${id}`)
   }
+
+  async enrichBookMetadata(id) {
+    return this.request('POST', `/admin/books/${id}/enrich`)
+  }
+
+  async batchEnrichBooks(force = false) {
+    return this.request('POST', '/admin/books/batch-enrich', { force })
+  }
+
+  async getCacheStats() {
+    return this.request('GET', '/admin/metadata/cache-stats')
+  }
+
+  async clearMetadataCache() {
+    return this.request('DELETE', '/admin/metadata/cache')
+  }
 }
 
 export const api = new ApiService()

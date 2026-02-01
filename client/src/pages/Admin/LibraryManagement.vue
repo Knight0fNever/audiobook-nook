@@ -13,10 +13,13 @@ const toast = useToast()
 
 const status = ref(null)
 const loading = ref(true)
+const enriching = ref(false)
+const cacheStats = ref(null)
 let pollInterval = null
 
 onMounted(async () => {
   await loadStatus()
+  await loadCacheStats()
   startPolling()
 })
 
@@ -75,6 +78,56 @@ async function triggerScan() {
       severity: 'error',
       summary: 'Error',
       detail: error.message || 'Failed to start scan',
+      life: 3000
+    })
+  }
+}
+
+async function batchEnrich() {
+  enriching.value = true
+  try {
+    const result = await api.batchEnrichBooks(false)
+    toast.add({
+      severity: 'success',
+      summary: 'Enrichment Started',
+      detail: `Enriching ${result.total} books`,
+      life: 5000
+    })
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: error.message || 'Failed to start enrichment',
+      life: 3000
+    })
+  } finally {
+    enriching.value = false
+  }
+}
+
+async function loadCacheStats() {
+  try {
+    cacheStats.value = await api.getCacheStats()
+  } catch (error) {
+    console.error('Failed to load cache stats:', error)
+  }
+}
+
+async function clearCache() {
+  try {
+    await api.clearMetadataCache()
+    toast.add({
+      severity: 'success',
+      summary: 'Cache Cleared',
+      detail: 'API metadata cache has been cleared',
+      life: 3000
+    })
+    await loadCacheStats()
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: error.message || 'Failed to clear cache',
       life: 3000
     })
   }
@@ -154,6 +207,14 @@ async function triggerScan() {
               </ul>
             </div>
 
+            <div v-if="status?.scan.enrichment?.enabled" class="enrichment-results">
+              <p>Enrichment results:</p>
+              <ul>
+                <li>Succeeded: {{ status.scan.enrichment.succeeded }}</li>
+                <li>Failed: {{ status.scan.enrichment.failed }}</li>
+              </ul>
+            </div>
+
             <Button
               label="Scan Now"
               icon="pi pi-refresh"
@@ -170,6 +231,49 @@ async function triggerScan() {
             >
               <code>{{ error.folder }}</code>
               <span>{{ error.error }}</span>
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <!-- Metadata Enrichment -->
+      <Card>
+        <template #title>API Metadata Enrichment</template>
+        <template #content>
+          <div class="enrichment-section">
+            <p class="section-description">
+              Enrich book metadata using Open Library and Google Books APIs.
+              This adds ISBNs, publishers, descriptions, and cover images.
+            </p>
+
+            <div class="enrichment-actions">
+              <Button
+                label="Enrich All Books"
+                icon="pi pi-sync"
+                :loading="enriching"
+                @click="batchEnrich"
+              />
+            </div>
+
+            <div v-if="cacheStats" class="cache-stats">
+              <h4>Cache Statistics</h4>
+              <div class="stats-grid">
+                <div class="stat-item">
+                  <span class="stat-value">{{ cacheStats.valid }}</span>
+                  <span class="stat-label">Cached Entries</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-value">{{ cacheStats.expired }}</span>
+                  <span class="stat-label">Expired</span>
+                </div>
+              </div>
+              <Button
+                label="Clear Cache"
+                icon="pi pi-trash"
+                severity="secondary"
+                size="small"
+                @click="clearCache"
+              />
             </div>
           </div>
         </template>
@@ -286,6 +390,49 @@ async function triggerScan() {
 .scan-results ul {
   margin: 0;
   padding-left: 1.5rem;
+}
+
+.enrichment-results {
+  background: var(--surface-100);
+  padding: 1rem;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+
+.enrichment-results p {
+  margin: 0 0 0.5rem;
+  font-weight: 500;
+}
+
+.enrichment-results ul {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.enrichment-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.section-description {
+  color: var(--text-color-secondary);
+  margin: 0;
+}
+
+.enrichment-actions {
+  display: flex;
+  gap: 1rem;
+}
+
+.cache-stats {
+  background: var(--surface-100);
+  padding: 1rem;
+  border-radius: 8px;
+}
+
+.cache-stats h4 {
+  margin: 0 0 1rem;
 }
 
 .scan-errors {

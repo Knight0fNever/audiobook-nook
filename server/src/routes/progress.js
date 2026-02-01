@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import path from 'path';
 import { getDb } from '../database/init.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { NotFoundError, ValidationError } from '../middleware/errorHandler.js';
@@ -27,7 +28,7 @@ progressRouter.get('/', authenticateToken, (req, res, next) => {
       title: p.title,
       author: p.author,
       cover_path: p.cover_path,
-      cover_url: p.cover_path ? `/covers/${p.cover_path.split('/').pop()}` : null,
+      cover_url: p.cover_path ? `/covers/${path.basename(p.cover_path)}` : null,
       current_chapter: p.current_chapter,
       position_seconds: p.position_seconds,
       completed: Boolean(p.completed),
@@ -76,7 +77,7 @@ progressRouter.get('/recent', authenticateToken, (req, res, next) => {
       narrator: p.narrator,
       series_name: p.series_name,
       cover_path: p.cover_path,
-      cover_url: p.cover_path ? `/covers/${p.cover_path.split('/').pop()}` : null,
+      cover_url: p.cover_path ? `/covers/${path.basename(p.cover_path)}` : null,
       current_chapter: p.current_chapter,
       position_seconds: p.position_seconds,
       book_duration: p.book_duration,

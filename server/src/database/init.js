@@ -13,6 +13,43 @@ export function getDb() {
   return db;
 }
 
+function runMigrations(database) {
+  // Get current schema version
+  const userVersion = database.pragma('user_version', { simple: true });
+
+  console.log(`Current database version: ${userVersion}`);
+
+  // Migration 1: Add API metadata fields
+  if (userVersion < 1) {
+    console.log('Running migration 1: Adding API metadata fields...');
+
+    try {
+      // Check if columns already exist to avoid errors
+      const tableInfo = database.pragma('table_info(books)');
+      const columnNames = tableInfo.map(col => col.name);
+
+      if (!columnNames.includes('isbn')) {
+        database.exec(`
+          ALTER TABLE books ADD COLUMN isbn TEXT;
+          ALTER TABLE books ADD COLUMN publisher TEXT;
+          ALTER TABLE books ADD COLUMN api_description TEXT;
+          ALTER TABLE books ADD COLUMN api_cover_url TEXT;
+          ALTER TABLE books ADD COLUMN metadata_source TEXT;
+          ALTER TABLE books ADD COLUMN metadata_enriched_at DATETIME;
+        `);
+        console.log('Added API metadata columns to books table');
+      } else {
+        console.log('API metadata columns already exist');
+      }
+
+      database.pragma('user_version = 1');
+      console.log('Migration 1 complete');
+    } catch (error) {
+      console.error('Migration 1 failed:', error.message);
+    }
+  }
+}
+
 export async function initializeDatabase() {
   // Ensure data directory exists
   const dataDir = path.dirname(config.database.path);
@@ -28,6 +65,9 @@ export async function initializeDatabase() {
   db = new Database(config.database.path);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+
+  // Run migrations first
+  runMigrations(db);
 
   // Create tables
   db.exec(`
@@ -63,6 +103,12 @@ export async function initializeDatabase() {
       series_order REAL,
       cover_path TEXT,
       folder_path TEXT UNIQUE NOT NULL,
+      isbn TEXT,
+      publisher TEXT,
+      api_description TEXT,
+      api_cover_url TEXT,
+      metadata_source TEXT,
+      metadata_enriched_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -108,12 +154,25 @@ export async function initializeDatabase() {
       value TEXT
     );
 
+    -- API Metadata Cache table
+    CREATE TABLE IF NOT EXISTS api_metadata_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cache_key TEXT UNIQUE NOT NULL,
+      response_data TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL
+    );
+
     -- Indexes for performance
     CREATE INDEX IF NOT EXISTS idx_books_author ON books(author);
     CREATE INDEX IF NOT EXISTS idx_books_series ON books(series_id);
+    CREATE INDEX IF NOT EXISTS idx_books_isbn ON books(isbn);
     CREATE INDEX IF NOT EXISTS idx_chapters_book ON chapters(book_id);
     CREATE INDEX IF NOT EXISTS idx_progress_user ON user_progress(user_id);
     CREATE INDEX IF NOT EXISTS idx_progress_book ON user_progress(book_id);
+    CREATE INDEX IF NOT EXISTS idx_cache_key ON api_metadata_cache(cache_key);
+    CREATE INDEX IF NOT EXISTS idx_cache_expires ON api_metadata_cache(expires_at);
   `);
 
   // Create default admin user if no users exist
@@ -131,7 +190,11 @@ export async function initializeDatabase() {
   const defaultSettings = {
     library_path: config.library.path,
     scan_schedule: '',
-    openlibrary_enabled: 'false'
+    openlibrary_enabled: 'false',
+    api_enrichment_enabled: 'true',
+    api_enrichment_prefer_api_covers: 'true',
+    api_enrichment_rate_limit_delay: '600',
+    google_books_api_key: ''
   };
 
   const insertSetting = db.prepare(`
