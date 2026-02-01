@@ -4,7 +4,7 @@ import { getDb } from '../database/init.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import { scanLibrary, getScanStatus } from '../services/scanner/index.js';
-import { enrichBookMetadata, updateBookWithEnrichedData } from '../services/metadata/apiEnrichment.js';
+import { enrichBookMetadata, updateBookWithEnrichedData, searchMultipleResults } from '../services/metadata/apiEnrichment.js';
 import { clearCache, getCacheStats } from '../services/metadata/apiCache.js';
 import { extractMetadata } from '../services/metadata/index.js';
 import { config } from '../config/index.js';
@@ -377,6 +377,91 @@ adminRouter.post('/books/:id/enrich', async (req, res, next) => {
       book: updatedBook,
       source: enrichedData.source,
       enrichedFields
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/admin/books/:id/search-metadata - Search for multiple metadata results
+adminRouter.post('/books/:id/search-metadata', async (req, res, next) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+    const { limit = 5 } = req.body;
+
+    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(id);
+    if (!book) {
+      throw new NotFoundError('Book not found');
+    }
+
+    // Get audio metadata from first chapter
+    const firstChapter = db.prepare(`
+      SELECT file_path FROM chapters WHERE book_id = ? ORDER BY order_index LIMIT 1
+    `).get(id);
+
+    let audioMetadata = null;
+    if (firstChapter && fs.existsSync(firstChapter.file_path)) {
+      audioMetadata = await extractMetadata(firstChapter.file_path);
+    }
+
+    // Search for multiple results
+    const searchResults = await searchMultipleResults(book, audioMetadata, { limit });
+
+    if (!searchResults || searchResults.results.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No metadata found from APIs',
+        results: []
+      });
+    }
+
+    // If only one result, auto-apply it
+    if (searchResults.results.length === 1) {
+      const updatedBook = await updateBookWithEnrichedData(id, searchResults.results[0]);
+      return res.json({
+        success: true,
+        autoApplied: true,
+        book: updatedBook,
+        source: searchResults.source
+      });
+    }
+
+    // Return multiple results for user selection
+    res.json({
+      success: true,
+      autoApplied: false,
+      results: searchResults.results,
+      source: searchResults.source
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/admin/books/:id/apply-metadata - Apply selected metadata
+adminRouter.post('/books/:id/apply-metadata', async (req, res, next) => {
+  try {
+    const db = getDb();
+    const { id } = req.params;
+    const { metadata } = req.body;
+
+    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(id);
+    if (!book) {
+      throw new NotFoundError('Book not found');
+    }
+
+    if (!metadata) {
+      throw new ValidationError('Metadata is required');
+    }
+
+    // Update book with selected metadata
+    const updatedBook = await updateBookWithEnrichedData(id, metadata);
+
+    res.json({
+      success: true,
+      book: updatedBook,
+      source: metadata.source
     });
   } catch (error) {
     next(error);

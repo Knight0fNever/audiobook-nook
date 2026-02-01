@@ -189,6 +189,14 @@ class ApiService {
     return this.request('POST', `/admin/books/${id}/enrich`)
   }
 
+  async searchBookMetadata(id, limit = 5) {
+    return this.request('POST', `/admin/books/${id}/search-metadata`, { limit })
+  }
+
+  async applyBookMetadata(id, metadata) {
+    return this.request('POST', `/admin/books/${id}/apply-metadata`, { metadata })
+  }
+
   async batchEnrichBooks(force = false) {
     return this.request('POST', '/admin/books/batch-enrich', { force })
   }

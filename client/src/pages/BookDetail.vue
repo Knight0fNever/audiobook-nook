@@ -10,6 +10,7 @@ import Tag from 'primevue/tag'
 import Skeleton from 'primevue/skeleton'
 import Divider from 'primevue/divider'
 import { useToast } from 'primevue/usetoast'
+import MetadataSelectionDialog from '../components/MetadataSelectionDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +22,9 @@ const book = ref(null)
 const chapters = ref([])
 const loading = ref(true)
 const enriching = ref(false)
+const showMetadataDialog = ref(false)
+const metadataResults = ref([])
+const metadataSource = ref(null)
 
 const isCurrentBook = computed(() => playerStore.currentBook?.id === book.value?.id)
 
@@ -75,17 +79,22 @@ async function enrichMetadata() {
 
   enriching.value = true
   try {
-    const result = await api.enrichBookMetadata(route.params.id)
-    if (result.success) {
-      // Reload the book from the proper endpoint to get formatted data
-      book.value = await api.getBook(route.params.id)
+    const result = await api.searchBookMetadata(route.params.id)
 
+    if (result.autoApplied) {
+      // Single result was auto-applied
+      book.value = await api.getBook(route.params.id)
       toast.add({
         severity: 'success',
         summary: 'Metadata Enriched',
         detail: `Successfully enriched from ${result.source}`,
         life: 3000
       })
+    } else if (result.results && result.results.length > 0) {
+      // Multiple results - show selection dialog
+      metadataResults.value = result.results
+      metadataSource.value = result.source
+      showMetadataDialog.value = true
     } else {
       toast.add({
         severity: 'info',
@@ -103,6 +112,27 @@ async function enrichMetadata() {
     })
   } finally {
     enriching.value = false
+  }
+}
+
+async function applySelectedMetadata(selectedMetadata) {
+  try {
+    const result = await api.applyBookMetadata(route.params.id, selectedMetadata)
+    book.value = await api.getBook(route.params.id)
+
+    toast.add({
+      severity: 'success',
+      summary: 'Metadata Applied',
+      detail: `Successfully applied metadata from ${result.source}`,
+      life: 3000
+    })
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: 'Application Failed',
+      detail: error.message || 'Failed to apply metadata',
+      life: 3000
+    })
   }
 }
 
@@ -274,6 +304,13 @@ function getMetadataSourceSeverity(source) {
         </div>
       </div>
     </div>
+
+    <MetadataSelectionDialog
+      v-model:visible="showMetadataDialog"
+      :results="metadataResults"
+      :source="metadataSource"
+      @select="applySelectedMetadata"
+    />
   </div>
 </template>
 

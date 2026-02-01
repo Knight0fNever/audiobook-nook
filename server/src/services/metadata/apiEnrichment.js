@@ -146,6 +146,30 @@ async function fetchOpenLibraryWork(workKey) {
 }
 
 /**
+ * Fetch Open Library edition details
+ * @param {string} editionKey - Edition key (e.g., "OL51708686M")
+ * @returns {Object|null} - Edition details or null
+ */
+async function fetchOpenLibraryEdition(editionKey) {
+  try {
+    // Remove /books/ prefix if present
+    const cleanKey = editionKey.replace('/books/', '');
+    const url = `${OPEN_LIBRARY_BASE}/books/${cleanKey}.json`;
+    const response = await fetchWithRetry(url);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const edition = await response.json();
+    return edition;
+  } catch (error) {
+    console.error('Open Library edition fetch error:', error.message);
+    return null;
+  }
+}
+
+/**
  * Query Open Library by title and author search
  * @param {string} title - Book title
  * @param {string} author - Author name
@@ -171,16 +195,20 @@ async function queryOpenLibraryBySearch(title, author) {
     if (data.docs && data.docs.length > 0) {
       const result = data.docs[0];
 
-      // If we have a work key, fetch the full work details for description
-      if (result.key) {
-        const workDetails = await fetchOpenLibraryWork(result.key);
+      let workDetails = null;
+      let editionDetails = null;
 
-        if (workDetails) {
-          return parseOpenLibrarySearchData(result, workDetails);
-        }
+      // Fetch work details for description
+      if (result.key) {
+        workDetails = await fetchOpenLibraryWork(result.key);
       }
 
-      return parseOpenLibrarySearchData(result);
+      // Fetch edition details for ISBN/publisher
+      if (result.cover_edition_key) {
+        editionDetails = await fetchOpenLibraryEdition(result.cover_edition_key);
+      }
+
+      return parseOpenLibrarySearchData(result, workDetails, editionDetails);
     }
 
     return null;
@@ -273,10 +301,28 @@ function parseOpenLibraryData(data, isbn, workDetails = null) {
  * Parse Open Library search response
  * @param {Object} data - Search result
  * @param {Object} workDetails - Optional work details from Works API
+ * @param {Object} editionDetails - Optional edition details for ISBN/publisher
  * @returns {Object} - Parsed metadata
  */
-function parseOpenLibrarySearchData(data, workDetails = null) {
-  const isbn = data.isbn?.[0] || null;
+function parseOpenLibrarySearchData(data, workDetails = null, editionDetails = null) {
+  // Try to get ISBN from multiple sources
+  let isbn = null;
+  if (editionDetails) {
+    // Edition details have the most reliable ISBN data
+    isbn = editionDetails.isbn_13?.[0] || editionDetails.isbn_10?.[0] || null;
+  }
+  if (!isbn) {
+    isbn = data.isbn?.[0] || null;
+  }
+
+  // Try to get publisher from multiple sources
+  let publisher = null;
+  if (editionDetails) {
+    publisher = editionDetails.publishers?.[0] || null;
+  }
+  if (!publisher) {
+    publisher = data.publisher?.[0] || null;
+  }
 
   // Extract description from work details if available
   let description = null;
@@ -294,8 +340,10 @@ function parseOpenLibrarySearchData(data, workDetails = null) {
 
   return {
     source: 'openlibrary',
+    title: data.title || null,
+    author: data.author_name?.[0] || null,
     isbn: isbn,
-    publisher: data.publisher?.[0] || null,
+    publisher: publisher,
     description: description,
     coverUrl: isbn ? `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg` : null,
     publicationYear: data.first_publish_year || null
@@ -315,6 +363,8 @@ function parseGoogleBooksData(item) {
 
   return {
     source: 'googlebooks',
+    title: volumeInfo.title || null,
+    author: volumeInfo.authors?.[0] || null,
     isbn: isbn,
     publisher: volumeInfo.publisher || null,
     description: volumeInfo.description || null,
@@ -384,11 +434,11 @@ export async function updateBookWithEnrichedData(bookId, apiData) {
     }
   }
 
-  // Update book record
+  // Update book record (API enrichment takes precedence over existing data)
   db.prepare(`
     UPDATE books SET
-      isbn = COALESCE(?, isbn),
-      publisher = COALESCE(?, publisher),
+      isbn = ?,
+      publisher = ?,
       api_description = ?,
       api_cover_url = ?,
       metadata_source = ?,
@@ -452,4 +502,160 @@ function extractYear(dateStr) {
  */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Query Open Library search with multiple results
+ * @param {string} title - Book title
+ * @param {string} author - Author name
+ * @param {number} limit - Max results to return
+ * @returns {Array<Object>} - Array of metadata objects
+ */
+async function queryOpenLibrarySearchMultiple(title, author, limit = 5) {
+  try {
+    const searchParams = new URLSearchParams({
+      title: title,
+      author: author,
+      limit: limit
+    });
+
+    const url = `${OPEN_LIBRARY_BASE}/search.json?${searchParams}`;
+    const response = await fetchWithRetry(url);
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+
+    if (data.docs && data.docs.length > 0) {
+      const results = [];
+
+      // Process up to limit results
+      for (const result of data.docs.slice(0, limit)) {
+        let workDetails = null;
+        let editionDetails = null;
+
+        // Fetch work details for description
+        if (result.key) {
+          workDetails = await fetchOpenLibraryWork(result.key);
+        }
+
+        // Fetch edition details for ISBN/publisher
+        if (result.cover_edition_key) {
+          editionDetails = await fetchOpenLibraryEdition(result.cover_edition_key);
+        }
+
+        const parsed = parseOpenLibrarySearchData(result, workDetails, editionDetails);
+        results.push(parsed);
+      }
+
+      return results;
+    }
+
+    return [];
+  } catch (error) {
+    console.error('Open Library multi-search error:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Query Google Books with multiple results
+ * @param {string} isbn - ISBN or null
+ * @param {string} title - Book title
+ * @param {string} author - Author name
+ * @param {number} limit - Max results to return
+ * @returns {Array<Object>} - Array of metadata objects
+ */
+async function queryGoogleBooksMultiple(isbn, title, author, limit = 5) {
+  try {
+    const db = getDb();
+    const apiKeySetting = db.prepare("SELECT value FROM settings WHERE key = 'google_books_api_key'").get();
+    const apiKey = apiKeySetting?.value || '';
+
+    let query;
+    if (isbn) {
+      query = `isbn:${isbn}`;
+    } else if (title && author) {
+      query = `intitle:${title}+inauthor:${author}`;
+    } else {
+      return [];
+    }
+
+    const searchParams = new URLSearchParams({ q: query, maxResults: limit });
+    if (apiKey) {
+      searchParams.append('key', apiKey);
+    }
+
+    const url = `${GOOGLE_BOOKS_BASE}/volumes?${searchParams}`;
+    const response = await fetchWithRetry(url);
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+
+    if (data.items && data.items.length > 0) {
+      return data.items.map(item => parseGoogleBooksData(item));
+    }
+
+    return [];
+  } catch (error) {
+    console.error('Google Books multi-query error:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Search for multiple metadata results (for user selection)
+ * @param {Object} book - Book record from database
+ * @param {Object} metadata - Audio metadata from first file
+ * @param {Object} options - Search options
+ * @returns {Object|null} - { results: [...], source: 'openlibrary'|'googlebooks' } or null
+ */
+export async function searchMultipleResults(book, metadata = null, options = {}) {
+  const { limit = 5 } = options;
+
+  try {
+    // Extract ISBN
+    const isbn = extractISBN(book.folder_path, '', metadata);
+
+    let results = [];
+    let source = null;
+
+    // Try Open Library by ISBN first (single result)
+    if (isbn) {
+      const singleResult = await queryOpenLibraryByISBN(isbn);
+      if (singleResult) {
+        return { results: [singleResult], source: 'openlibrary' };
+      }
+    }
+
+    // Try Open Library search (multiple results)
+    if (book.title && book.author) {
+      results = await queryOpenLibrarySearchMultiple(book.title, book.author, limit);
+      if (results.length > 0) {
+        source = 'openlibrary';
+      }
+    }
+
+    // Fallback to Google Books (multiple results)
+    if (results.length === 0) {
+      results = await queryGoogleBooksMultiple(isbn, book.title, book.author, limit);
+      if (results.length > 0) {
+        source = 'googlebooks';
+      }
+    }
+
+    if (results.length === 0) {
+      return null;
+    }
+
+    return { results, source };
+  } catch (error) {
+    console.error(`Error searching multiple results for ${book.title}:`, error.message);
+    return null;
+  }
 }
