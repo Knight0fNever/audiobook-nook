@@ -208,6 +208,48 @@ class ApiService {
   async clearMetadataCache() {
     return this.request('DELETE', '/admin/metadata/cache')
   }
+
+  // PDF Follow-Along
+  async getPdfInfo(bookId) {
+    return this.request('GET', `/pdf/books/${bookId}`)
+  }
+
+  async getPdfAlignment(bookId) {
+    return this.request('GET', `/pdf/books/${bookId}/alignment`)
+  }
+
+  async uploadPdf(bookId, file) {
+    const formData = new FormData()
+    formData.append('pdf', file)
+
+    const url = `${API_BASE}/pdf/books/${bookId}/upload`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: formData
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Upload failed' }))
+      throw new Error(error.message || 'Upload failed')
+    }
+
+    return response.json()
+  }
+
+  async deletePdf(bookId) {
+    return this.request('DELETE', `/pdf/books/${bookId}`)
+  }
+
+  async cancelPdfProcessing(bookId) {
+    return this.request('POST', `/pdf/books/${bookId}/cancel`)
+  }
+
+  getPdfFileUrl(pdfId) {
+    return `${API_BASE}/pdf/${pdfId}/file?token=${this.token}`
+  }
 }
 
 export const api = new ApiService()

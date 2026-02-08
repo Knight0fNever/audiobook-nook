@@ -27,6 +27,12 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/book/:id/pdf-player',
+    name: 'pdf-player',
+    component: () => import('../pages/PdfPlayer.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/series',
     name: 'series-list',
     component: () => import('../pages/SeriesList.vue'),

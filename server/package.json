@@ -10,6 +10,7 @@
     "migrate": "node src/database/migrate.js"
   },
   "dependencies": {
+    "@lumen-labs-dev/whisper-node": "^0.4.1",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.3.0",
     "cors": "^2.8.5",
@@ -18,9 +19,13 @@
     "isbn3": "^2.0.3",
     "jsonwebtoken": "^9.0.2",
     "mime-types": "^2.1.35",
+    "multer": "^2.0.2",
     "music-metadata": "^10.0.0",
+    "natural": "^8.1.0",
     "node-cron": "^3.0.3",
-    "uuid": "^10.0.0"
+    "pdf-parse": "^2.4.5",
+    "uuid": "^10.0.0",
+    "whisper-node": "^1.1.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"

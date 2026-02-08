@@ -28,6 +28,15 @@ export const config = {
     path: path.join(__dirname, '../../data/covers')
   },
 
+  pdfs: {
+    path: path.join(__dirname, '../../data/pdfs'),
+    maxFileSize: parseInt(process.env.PDF_MAX_FILE_SIZE || '104857600', 10), // 100MB default
+    whisperModel: process.env.WHISPER_MODEL || 'base.en',
+    // Windows whisper flavor: 'cpu' (default), 'blas' (OpenBLAS, faster CPU),
+    // 'cublas-11.8' or 'cublas-12.4' (NVIDIA GPU, requires CUDA binaries)
+    whisperFlavor: process.env.WHISPER_WIN_FLAVOR || 'cpu'
+  },
+
   openlibrary: {
     enabled: process.env.OPENLIBRARY_ENABLED === 'true',
     baseUrl: 'https://openlibrary.org'

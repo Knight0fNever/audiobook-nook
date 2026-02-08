@@ -48,6 +48,72 @@ function runMigrations(database) {
       console.error('Migration 1 failed:', error.message);
     }
   }
+
+  // Migration 2: Add PDF follow-along tables
+  if (userVersion < 2) {
+    console.log('Running migration 2: Adding PDF follow-along tables...');
+
+    try {
+      database.exec(`
+        -- PDF Documents table
+        CREATE TABLE IF NOT EXISTS pdf_documents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          file_size INTEGER NOT NULL,
+          page_count INTEGER,
+          is_scanned BOOLEAN DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(book_id, user_id)
+        );
+
+        -- PDF Processing Jobs table
+        CREATE TABLE IF NOT EXISTS pdf_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pdf_id INTEGER NOT NULL REFERENCES pdf_documents(id) ON DELETE CASCADE,
+          status TEXT DEFAULT 'pending' CHECK(status IN ('pending','transcribing','extracting','aligning','completed','failed')),
+          progress INTEGER DEFAULT 0,
+          error_message TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Audio Transcriptions cache (per book, reusable across users)
+        CREATE TABLE IF NOT EXISTS audio_transcriptions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+          chapter_index INTEGER NOT NULL,
+          sentence_timestamps JSON NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(book_id, chapter_index)
+        );
+
+        -- PDF Alignment Data
+        CREATE TABLE IF NOT EXISTS pdf_alignment (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pdf_id INTEGER NOT NULL REFERENCES pdf_documents(id) ON DELETE CASCADE,
+          alignment_data JSON NOT NULL,
+          quality REAL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Indexes for PDF tables
+        CREATE INDEX IF NOT EXISTS idx_pdf_documents_book ON pdf_documents(book_id);
+        CREATE INDEX IF NOT EXISTS idx_pdf_documents_user ON pdf_documents(user_id);
+        CREATE INDEX IF NOT EXISTS idx_pdf_jobs_pdf ON pdf_jobs(pdf_id);
+        CREATE INDEX IF NOT EXISTS idx_pdf_jobs_status ON pdf_jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_audio_transcriptions_book ON audio_transcriptions(book_id);
+        CREATE INDEX IF NOT EXISTS idx_pdf_alignment_pdf ON pdf_alignment(pdf_id);
+      `);
+
+      database.pragma('user_version = 2');
+      console.log('Migration 2 complete: PDF follow-along tables created');
+    } catch (error) {
+      console.error('Migration 2 failed:', error.message);
+    }
+  }
 }
 
 export async function initializeDatabase() {

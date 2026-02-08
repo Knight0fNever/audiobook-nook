@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../services/api'
 import { usePlayerStore } from '../stores/player'
 import { useAuthStore } from '../stores/auth'
+import { usePdfFollowAlongStore } from '../stores/pdfFollowAlong'
 import Button from 'primevue/button'
 import ProgressBar from 'primevue/progressbar'
 import Tag from 'primevue/tag'
@@ -11,11 +12,13 @@ import Skeleton from 'primevue/skeleton'
 import Divider from 'primevue/divider'
 import { useToast } from 'primevue/usetoast'
 import MetadataSelectionDialog from '../components/MetadataSelectionDialog.vue'
+import PdfUploadDialog from '../components/pdf/PdfUploadDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const playerStore = usePlayerStore()
 const authStore = useAuthStore()
+const pdfStore = usePdfFollowAlongStore()
 const toast = useToast()
 
 const book = ref(null)
@@ -25,8 +28,63 @@ const enriching = ref(false)
 const showMetadataDialog = ref(false)
 const metadataResults = ref([])
 const metadataSource = ref(null)
+const showPdfUploadDialog = ref(false)
+let pdfStatusPollInterval = null
 
 const isCurrentBook = computed(() => playerStore.currentBook?.id === book.value?.id)
+
+const pdfStatusMessage = computed(() => {
+  const status = pdfStore.jobStatus
+  const messages = {
+    pending: 'Waiting to start...',
+    extracting: 'Extracting text from PDF...',
+    transcribing: 'Transcribing audio (this may take a while)...',
+    aligning: 'Aligning PDF with audio...',
+    completed: 'Processing complete!',
+    failed: 'Processing failed'
+  }
+  return messages[status] || 'Processing...'
+})
+
+// Start polling for PDF status when processing
+function startPdfStatusPolling() {
+  if (pdfStatusPollInterval) return
+
+  pdfStatusPollInterval = setInterval(async () => {
+    await pdfStore.refreshStatus()
+    if (!pdfStore.isProcessing) {
+      stopPdfStatusPolling()
+      if (pdfStore.isReady) {
+        toast.add({
+          severity: 'success',
+          summary: 'PDF Ready',
+          detail: 'PDF processing complete. You can now use the follow-along feature.',
+          life: 5000
+        })
+      }
+    }
+  }, 2000)
+}
+
+function stopPdfStatusPolling() {
+  if (pdfStatusPollInterval) {
+    clearInterval(pdfStatusPollInterval)
+    pdfStatusPollInterval = null
+  }
+}
+
+// Watch for processing state changes
+watch(() => pdfStore.isProcessing, (isProcessing) => {
+  if (isProcessing) {
+    startPdfStatusPolling()
+  } else {
+    stopPdfStatusPolling()
+  }
+}, { immediate: true })
+
+onUnmounted(() => {
+  stopPdfStatusPolling()
+})
 
 onMounted(async () => {
   try {
@@ -36,6 +94,9 @@ onMounted(async () => {
     ])
     book.value = bookData
     chapters.value = chaptersData
+
+    // Load PDF info
+    pdfStore.loadPdfInfo(parseInt(route.params.id))
   } catch (error) {
     console.error('Failed to load book:', error)
   } finally {
@@ -58,6 +119,66 @@ async function playFromChapter(index) {
 
 function openFullPlayer() {
   router.push('/player')
+}
+
+function openPdfPlayer() {
+  router.push(`/book/${route.params.id}/pdf-player`)
+}
+
+function handlePdfUploaded() {
+  toast.add({
+    severity: 'success',
+    summary: 'PDF Uploaded',
+    detail: 'PDF is now being processed. This may take a few minutes.',
+    life: 5000
+  })
+}
+
+async function deletePdf() {
+  if (!confirm('Are you sure you want to delete this PDF? This will also remove all alignment data.')) {
+    return
+  }
+
+  try {
+    await pdfStore.deletePdf()
+    toast.add({
+      severity: 'success',
+      summary: 'PDF Deleted',
+      detail: 'The PDF has been removed.',
+      life: 3000
+    })
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: 'Delete Failed',
+      detail: error.message || 'Failed to delete PDF',
+      life: 3000
+    })
+  }
+}
+
+async function cancelPdfProcessing() {
+  if (!confirm('Are you sure you want to cancel PDF processing?')) {
+    return
+  }
+
+  try {
+    await pdfStore.cancelProcessing()
+    stopPdfStatusPolling()
+    toast.add({
+      severity: 'info',
+      summary: 'Processing Cancelled',
+      detail: 'PDF processing has been cancelled.',
+      life: 3000
+    })
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: 'Cancel Failed',
+      detail: error.message || 'Failed to cancel processing',
+      life: 3000
+    })
+  }
 }
 
 function formatDuration(seconds) {
@@ -253,6 +374,55 @@ function getMetadataSourceSeverity(source) {
               :loading="enriching"
               @click="enrichMetadata"
             />
+
+            <Button
+              v-if="pdfStore.hasPdf && pdfStore.isReady"
+              label="PDF Follow-Along"
+              icon="pi pi-file-pdf"
+              severity="help"
+              @click="openPdfPlayer"
+            />
+
+            <Button
+              v-else-if="!pdfStore.hasPdf"
+              label="Upload PDF"
+              icon="pi pi-upload"
+              severity="secondary"
+              @click="showPdfUploadDialog = true"
+            />
+
+            <Button
+              v-if="pdfStore.hasPdf && !pdfStore.isProcessing"
+              label="Delete PDF"
+              icon="pi pi-trash"
+              severity="danger"
+              outlined
+              @click="deletePdf"
+            />
+          </div>
+
+          <!-- PDF Processing Progress -->
+          <div v-if="pdfStore.hasPdf && pdfStore.isProcessing" class="pdf-processing-section">
+            <div class="pdf-processing-header">
+              <i class="pi pi-file-pdf"></i>
+              <span>Processing PDF</span>
+              <Button
+                icon="pi pi-times"
+                severity="secondary"
+                text
+                rounded
+                size="small"
+                class="cancel-btn"
+                @click="cancelPdfProcessing"
+                v-tooltip.top="'Cancel processing'"
+              />
+            </div>
+            <div class="pdf-processing-status">{{ pdfStatusMessage }}</div>
+            <ProgressBar :value="pdfStore.jobProgress" :showValue="true" class="pdf-progress-bar" />
+            <div v-if="pdfStore.pdfInfo?.job?.error" class="pdf-error">
+              <i class="pi pi-exclamation-triangle"></i>
+              {{ pdfStore.pdfInfo.job.error }}
+            </div>
           </div>
         </div>
       </div>
@@ -310,6 +480,13 @@ function getMetadataSourceSeverity(source) {
       :results="metadataResults"
       :source="metadataSource"
       @select="applySelectedMetadata"
+    />
+
+    <PdfUploadDialog
+      v-model:visible="showPdfUploadDialog"
+      :bookId="parseInt(route.params.id)"
+      :bookTitle="book?.title"
+      @uploaded="handlePdfUploaded"
     />
   </div>
 </template>
@@ -424,6 +601,59 @@ function getMetadataSourceSeverity(source) {
   display: flex;
   gap: 1rem;
   margin-top: auto;
+  flex-wrap: wrap;
+}
+
+.pdf-processing-section {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: var(--surface-100);
+  border-radius: 8px;
+  max-width: 400px;
+}
+
+.pdf-processing-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--primary-color);
+}
+
+.pdf-processing-header i {
+  font-size: 1.2rem;
+}
+
+.pdf-processing-header .cancel-btn {
+  margin-left: auto;
+  color: var(--text-color-secondary);
+}
+
+.pdf-processing-header .cancel-btn:hover {
+  color: var(--red-500);
+}
+
+.pdf-processing-status {
+  font-size: 0.9rem;
+  color: var(--text-color-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.pdf-progress-bar {
+  height: 8px;
+}
+
+.pdf-error {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  background: var(--red-50);
+  border-radius: 4px;
+  color: var(--red-700);
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .book-description {

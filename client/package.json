@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@primevue/themes": "^4.2.1",
+    "@tato30/vue-pdf": "^1.11.5",
+    "pdfjs-dist": "^5.4.624",
     "pinia": "^2.2.4",
     "primeflex": "^3.3.1",
     "primeicons": "^7.0.0",
