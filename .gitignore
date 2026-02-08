@@ -37,3 +37,13 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+
+# Binary files (Whisper, etc.)
+*.dll
+*.exe
+
+# Test/debug scripts
+check-isbn.js
+
+# Windows artifacts
+nul
