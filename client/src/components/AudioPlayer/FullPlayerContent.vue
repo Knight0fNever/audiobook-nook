@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { usePlayerStore } from '../../stores/player'
 import { useTranscriptStore } from '../../stores/transcript'
 import Button from 'primevue/button'
@@ -26,16 +26,27 @@ const volumeIcon = computed(() => {
   return 'pi pi-volume-up'
 })
 
-// Load transcript data when switching to transcript tab
-watch(activeTab, async (tab) => {
-  if (tab === 'transcript' && playerStore.currentBook) {
-    const bookId = playerStore.currentBook.id
-    if (transcriptStore.bookId !== bookId || transcriptStore.sentences.length === 0) {
-      await transcriptStore.loadTranscriptionInfo(bookId)
-      if (transcriptStore.hasTranscription) {
-        await transcriptStore.loadTranscriptionData(bookId)
-      }
+// Load transcript data for the current book
+async function loadTranscript() {
+  if (!playerStore.currentBook) return
+  const bookId = playerStore.currentBook.id
+  if (transcriptStore.bookId !== bookId || transcriptStore.sentences.length === 0) {
+    await transcriptStore.loadTranscriptionInfo(bookId)
+    if (transcriptStore.hasTranscription) {
+      await transcriptStore.loadTranscriptionData(bookId)
     }
+  }
+}
+
+// Auto-load transcript on mount (for desktop two-column layout)
+onMounted(() => {
+  loadTranscript()
+})
+
+// Also load when switching to transcript tab on mobile
+watch(activeTab, async (tab) => {
+  if (tab === 'transcript') {
+    await loadTranscript()
   }
 })
 </script>
@@ -54,167 +65,183 @@ watch(activeTab, async (tab) => {
       <div style="width: 40px"></div>
     </div>
 
-    <!-- Cover Art -->
-    <div class="cover-section">
-      <div class="cover-container">
-        <img
-          v-if="playerStore.currentBook.cover_url"
-          :src="playerStore.currentBook.cover_url"
-          :alt="playerStore.currentBook.title"
-        />
-        <div v-else class="cover-placeholder">
-          <i class="pi pi-book"></i>
+    <!-- Two-column layout -->
+    <div class="player-layout">
+      <!-- Left column: Player controls -->
+      <div class="player-main">
+        <!-- Cover Art -->
+        <div class="cover-section">
+          <div class="cover-container">
+            <img
+              v-if="playerStore.currentBook.cover_url"
+              :src="playerStore.currentBook.cover_url"
+              :alt="playerStore.currentBook.title"
+            />
+            <div v-else class="cover-placeholder">
+              <i class="pi pi-book"></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Book Info -->
+        <div class="book-info">
+          <h1 class="book-title">{{ playerStore.currentBook.title }}</h1>
+          <p class="book-author">{{ playerStore.currentBook.author }}</p>
+          <p class="chapter-info">
+            Chapter {{ playerStore.currentChapterIndex + 1 }} of {{ playerStore.chapters.length }}
+            <span v-if="playerStore.currentChapter"> - {{ playerStore.currentChapter.title }}</span>
+          </p>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-section">
+          <Slider
+            v-model="progressValue"
+            :step="0.1"
+            class="progress-slider"
+          />
+          <div class="time-display">
+            <span>{{ playerStore.formattedCurrentTime }}</span>
+            <span>{{ playerStore.formattedDuration }}</span>
+          </div>
+          <div class="global-progress">
+            <span>{{ playerStore.formattedGlobalPosition }}</span>
+            <span>/</span>
+            <span>{{ playerStore.formattedTotalDuration }}</span>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls-section">
+          <Button
+            icon="pi pi-step-backward"
+            text
+            rounded
+            size="large"
+            @click="playerStore.previousChapter"
+            :disabled="playerStore.currentChapterIndex === 0 && playerStore.currentTime < 3"
+          />
+
+          <Button
+            icon="pi pi-replay"
+            text
+            rounded
+            @click="playerStore.seekRelative(-30)"
+          >
+            <template #icon>
+              <span class="skip-button">
+                <i class="pi pi-replay"></i>
+                <span class="skip-text">30</span>
+              </span>
+            </template>
+          </Button>
+
+          <Button
+            :icon="playerStore.isPlaying ? 'pi pi-pause' : 'pi pi-play'"
+            rounded
+            size="large"
+            class="play-button"
+            :loading="playerStore.isLoading"
+            @click="playerStore.togglePlay"
+          />
+
+          <Button
+            text
+            rounded
+            @click="playerStore.seekRelative(30)"
+          >
+            <template #icon>
+              <span class="skip-button">
+                <i class="pi pi-refresh"></i>
+                <span class="skip-text">30</span>
+              </span>
+            </template>
+          </Button>
+
+          <Button
+            icon="pi pi-step-forward"
+            text
+            rounded
+            size="large"
+            @click="playerStore.nextChapter"
+            :disabled="playerStore.currentChapterIndex >= playerStore.chapters.length - 1"
+          />
+        </div>
+
+        <!-- Volume -->
+        <div class="volume-section">
+          <Button
+            :icon="volumeIcon"
+            text
+            rounded
+            @click="playerStore.setVolume(playerStore.volume === 0 ? 1 : 0)"
+          />
+          <Slider
+            :modelValue="playerStore.volume * 100"
+            @update:modelValue="(v) => playerStore.setVolume(v / 100)"
+            class="volume-slider"
+          />
+        </div>
+
+        <Divider />
+
+        <!-- Tab Toggle (mobile only) -->
+        <div class="tab-toggle">
+          <button
+            class="tab-button"
+            :class="{ active: activeTab === 'chapters' }"
+            @click="activeTab = 'chapters'"
+          >
+            Chapters
+          </button>
+          <button
+            class="tab-button"
+            :class="{ active: activeTab === 'transcript' }"
+            @click="activeTab = 'transcript'"
+          >
+            Transcript
+          </button>
+        </div>
+
+        <!-- Chapter List (always visible on desktop, tab-toggled on mobile) -->
+        <div class="chapters-section" :class="{ 'mobile-hidden': activeTab !== 'chapters' }">
+          <div class="chapters-list">
+            <div
+              v-for="(chapter, index) in playerStore.chapters"
+              :key="chapter.id"
+              class="chapter-item"
+              :class="{ active: playerStore.currentChapterIndex === index }"
+              @click="playerStore.goToChapter(index)"
+            >
+              <span class="chapter-number">{{ index + 1 }}</span>
+              <span class="chapter-title">{{ chapter.title }}</span>
+              <i
+                v-if="playerStore.currentChapterIndex === index && playerStore.isPlaying"
+                class="pi pi-volume-up"
+              ></i>
+            </div>
+          </div>
+        </div>
+
+        <!-- Transcript (mobile only, shown when transcript tab active) -->
+        <div class="mobile-transcript" :class="{ 'mobile-hidden': activeTab !== 'transcript' }">
+          <TranscriptPanel v-if="transcriptStore.hasTranscription || transcriptStore.sentences.length > 0" />
+          <div v-else class="no-transcript">
+            <i class="pi pi-align-left"></i>
+            <p>No transcript available</p>
+            <small>Transcribe this book from the book detail page</small>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Book Info -->
-    <div class="book-info">
-      <h1 class="book-title">{{ playerStore.currentBook.title }}</h1>
-      <p class="book-author">{{ playerStore.currentBook.author }}</p>
-      <p class="chapter-info">
-        Chapter {{ playerStore.currentChapterIndex + 1 }} of {{ playerStore.chapters.length }}
-        <span v-if="playerStore.currentChapter"> - {{ playerStore.currentChapter.title }}</span>
-      </p>
-    </div>
-
-    <!-- Progress -->
-    <div class="progress-section">
-      <Slider
-        v-model="progressValue"
-        :step="0.1"
-        class="progress-slider"
-      />
-      <div class="time-display">
-        <span>{{ playerStore.formattedCurrentTime }}</span>
-        <span>{{ playerStore.formattedDuration }}</span>
-      </div>
-      <div class="global-progress">
-        <span>{{ playerStore.formattedGlobalPosition }}</span>
-        <span>/</span>
-        <span>{{ playerStore.formattedTotalDuration }}</span>
-      </div>
-    </div>
-
-    <!-- Controls -->
-    <div class="controls-section">
-      <Button
-        icon="pi pi-step-backward"
-        text
-        rounded
-        size="large"
-        @click="playerStore.previousChapter"
-        :disabled="playerStore.currentChapterIndex === 0 && playerStore.currentTime < 3"
-      />
-
-      <Button
-        icon="pi pi-replay"
-        text
-        rounded
-        @click="playerStore.seekRelative(-30)"
-      >
-        <template #icon>
-          <span class="skip-button">
-            <i class="pi pi-replay"></i>
-            <span class="skip-text">30</span>
-          </span>
-        </template>
-      </Button>
-
-      <Button
-        :icon="playerStore.isPlaying ? 'pi pi-pause' : 'pi pi-play'"
-        rounded
-        size="large"
-        class="play-button"
-        :loading="playerStore.isLoading"
-        @click="playerStore.togglePlay"
-      />
-
-      <Button
-        text
-        rounded
-        @click="playerStore.seekRelative(30)"
-      >
-        <template #icon>
-          <span class="skip-button">
-            <i class="pi pi-refresh"></i>
-            <span class="skip-text">30</span>
-          </span>
-        </template>
-      </Button>
-
-      <Button
-        icon="pi pi-step-forward"
-        text
-        rounded
-        size="large"
-        @click="playerStore.nextChapter"
-        :disabled="playerStore.currentChapterIndex >= playerStore.chapters.length - 1"
-      />
-    </div>
-
-    <!-- Volume -->
-    <div class="volume-section">
-      <Button
-        :icon="volumeIcon"
-        text
-        rounded
-        @click="playerStore.setVolume(playerStore.volume === 0 ? 1 : 0)"
-      />
-      <Slider
-        :modelValue="playerStore.volume * 100"
-        @update:modelValue="(v) => playerStore.setVolume(v / 100)"
-        class="volume-slider"
-      />
-    </div>
-
-    <Divider />
-
-    <!-- Tab Toggle -->
-    <div class="tab-toggle">
-      <button
-        class="tab-button"
-        :class="{ active: activeTab === 'chapters' }"
-        @click="activeTab = 'chapters'"
-      >
-        Chapters
-      </button>
-      <button
-        class="tab-button"
-        :class="{ active: activeTab === 'transcript' }"
-        @click="activeTab = 'transcript'"
-      >
-        Transcript
-      </button>
-    </div>
-
-    <!-- Chapter List -->
-    <div v-if="activeTab === 'chapters'" class="chapters-section">
-      <div class="chapters-list">
-        <div
-          v-for="(chapter, index) in playerStore.chapters"
-          :key="chapter.id"
-          class="chapter-item"
-          :class="{ active: playerStore.currentChapterIndex === index }"
-          @click="playerStore.goToChapter(index)"
-        >
-          <span class="chapter-number">{{ index + 1 }}</span>
-          <span class="chapter-title">{{ chapter.title }}</span>
-          <i
-            v-if="playerStore.currentChapterIndex === index && playerStore.isPlaying"
-            class="pi pi-volume-up"
-          ></i>
+      <!-- Right column: Transcript (desktop only) -->
+      <div class="player-transcript">
+        <TranscriptPanel v-if="transcriptStore.hasTranscription || transcriptStore.sentences.length > 0" />
+        <div v-else class="no-transcript">
+          <i class="pi pi-align-left"></i>
+          <p>No transcript available</p>
+          <small>Transcribe this book from the book detail page</small>
         </div>
-      </div>
-    </div>
-
-    <!-- Transcript -->
-    <div v-else class="transcript-section">
-      <TranscriptPanel v-if="transcriptStore.hasTranscription || transcriptStore.sentences.length > 0" />
-      <div v-else class="no-transcript">
-        <i class="pi pi-align-left"></i>
-        <p>No transcript available</p>
-        <small>Transcribe this book from the book detail page</small>
       </div>
     </div>
   </div>
@@ -222,22 +249,49 @@ watch(activeTab, async (tab) => {
 
 <style scoped>
 .full-player-content {
-  max-width: 500px;
-  margin: 0 auto;
   padding: 1rem;
-  max-height: calc(100vh - 90px);
-  overflow-y: auto;
+  overflow: hidden;
   background-color: var(--app-bg);
   position: relative;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .player-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.player-layout {
+  display: flex;
+  flex-direction: row;
+  gap: 1.5rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.player-main {
+  max-width: 500px;
+  width: 100%;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.player-transcript {
+  flex: 1;
+  min-width: 250px;
+  border-left: 1px solid var(--surface-border);
+  padding-left: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .cover-section {
@@ -359,8 +413,9 @@ watch(activeTab, async (tab) => {
   flex: 1;
 }
 
+/* Tab toggle: hidden on desktop, visible on mobile */
 .tab-toggle {
-  display: flex;
+  display: none;
   gap: 0.25rem;
   margin-bottom: 1rem;
   background: var(--surface-100);
@@ -391,10 +446,11 @@ watch(activeTab, async (tab) => {
   color: var(--text-color);
 }
 
-.transcript-section {
+/* Mobile transcript: hidden on desktop */
+.mobile-transcript {
+  display: none;
   min-height: 200px;
   max-height: 300px;
-  display: flex;
   flex-direction: column;
 }
 
@@ -423,8 +479,6 @@ watch(activeTab, async (tab) => {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 .chapter-item {
@@ -466,7 +520,32 @@ watch(activeTab, async (tab) => {
   white-space: nowrap;
 }
 
-@media (max-width: 480px) {
+/* Mobile layout */
+@media (max-width: 768px) {
+  .player-layout {
+    flex-direction: column;
+  }
+
+  .player-main {
+    margin: 0 auto;
+  }
+
+  .player-transcript {
+    display: none;
+  }
+
+  .tab-toggle {
+    display: flex;
+  }
+
+  .mobile-transcript {
+    display: flex;
+  }
+
+  .mobile-hidden {
+    display: none !important;
+  }
+
   .cover-container {
     width: 220px;
     height: 220px;
