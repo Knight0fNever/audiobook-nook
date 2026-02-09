@@ -10,9 +10,9 @@ import { progressRouter } from './routes/progress.js';
 import { seriesRouter } from './routes/series.js';
 import { adminRouter } from './routes/admin.js';
 import { statsRouter } from './routes/stats.js';
-import { pdfRouter } from './routes/pdf.js';
+import { transcriptionRouter } from './routes/transcription.js';
 import { errorHandler } from './middleware/errorHandler.js';
-import { resumePendingJobs } from './services/pdf/jobQueue.js';
+import { resumePendingJobs } from './services/transcription/jobQueue.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,9 +31,6 @@ app.use(express.json());
 // Static files for covers
 app.use('/covers', express.static(config.covers.path));
 
-// Static files for PDFs (authenticated via route, not static)
-app.use('/pdfs', express.static(config.pdfs.path));
-
 // Serve client build in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../../client/dist')));
@@ -46,7 +43,7 @@ app.use('/api/progress', progressRouter);
 app.use('/api/series', seriesRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/stats', statsRouter);
-app.use('/api/pdf', pdfRouter);
+app.use('/api/transcription', transcriptionRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -69,7 +66,7 @@ async function start() {
     await initializeDatabase();
     console.log('Database initialized');
 
-    // Resume any pending PDF processing jobs
+    // Resume pending transcription jobs
     resumePendingJobs();
 
     app.listen(config.port, () => {

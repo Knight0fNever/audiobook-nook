@@ -13,10 +13,6 @@ export default defineConfig({
       '/covers': {
         target: 'http://localhost:3000',
         changeOrigin: true
-      },
-      '/pdfs': {
-        target: 'http://localhost:3000',
-        changeOrigin: true
       }
     }
   }

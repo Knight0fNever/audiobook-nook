@@ -28,9 +28,7 @@ export const config = {
     path: path.join(__dirname, '../../data/covers')
   },
 
-  pdfs: {
-    path: path.join(__dirname, '../../data/pdfs'),
-    maxFileSize: parseInt(process.env.PDF_MAX_FILE_SIZE || '104857600', 10), // 100MB default
+  transcription: {
     modelsPath: process.env.WHISPER_MODELS_PATH || path.join(__dirname, '../../data/models')
   },
 

@@ -7,7 +7,7 @@ import { scanLibrary, getScanStatus } from '../services/scanner/index.js';
 import { enrichBookMetadata, updateBookWithEnrichedData, searchMultipleResults } from '../services/metadata/apiEnrichment.js';
 import { clearCache, getCacheStats } from '../services/metadata/apiCache.js';
 import { extractMetadata } from '../services/metadata/index.js';
-import { getTranscriptionStatus, resetBackendDetection } from '../services/pdf/transcription.js';
+import { getTranscriptionStatus, resetBackendDetection } from '../services/transcription/transcription.js';
 import { config } from '../config/index.js';
 import path from 'path';
 import fs from 'fs';

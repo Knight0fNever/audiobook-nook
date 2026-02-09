@@ -213,46 +213,25 @@ class ApiService {
     return this.request('GET', '/admin/transcription/status')
   }
 
-  // PDF Follow-Along
-  async getPdfInfo(bookId) {
-    return this.request('GET', `/pdf/books/${bookId}`)
+  // Transcription
+  async startTranscription(bookId) {
+    return this.request('POST', `/transcription/books/${bookId}/start`)
   }
 
-  async getPdfAlignment(bookId) {
-    return this.request('GET', `/pdf/books/${bookId}/alignment`)
+  async getTranscriptionInfo(bookId) {
+    return this.request('GET', `/transcription/books/${bookId}/status`)
   }
 
-  async uploadPdf(bookId, file) {
-    const formData = new FormData()
-    formData.append('pdf', file)
-
-    const url = `${API_BASE}/pdf/books/${bookId}/upload`
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: formData
-    })
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Upload failed' }))
-      throw new Error(error.message || 'Upload failed')
-    }
-
-    return response.json()
+  async getTranscriptionData(bookId) {
+    return this.request('GET', `/transcription/books/${bookId}/data`)
   }
 
-  async deletePdf(bookId) {
-    return this.request('DELETE', `/pdf/books/${bookId}`)
+  async cancelTranscription(bookId) {
+    return this.request('POST', `/transcription/books/${bookId}/cancel`)
   }
 
-  async cancelPdfProcessing(bookId) {
-    return this.request('POST', `/pdf/books/${bookId}/cancel`)
-  }
-
-  getPdfFileUrl(pdfId) {
-    return `${API_BASE}/pdf/${pdfId}/file?token=${this.token}`
+  async deleteTranscription(bookId) {
+    return this.request('DELETE', `/transcription/books/${bookId}`)
   }
 }
 

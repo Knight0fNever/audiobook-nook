@@ -173,7 +173,7 @@ async function saveSettings() {
       <Card>
         <template #title>
           <div class="card-title-row">
-            <span>Transcription (PDF Follow-Along)</span>
+            <span>Transcription</span>
             <Tag
               v-if="transcriptionStatus"
               :value="transcriptionStatus.backend?.toUpperCase() || 'UNKNOWN'"

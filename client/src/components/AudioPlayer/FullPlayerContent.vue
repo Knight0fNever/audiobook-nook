@@ -1,12 +1,17 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { usePlayerStore } from '../../stores/player'
+import { useTranscriptStore } from '../../stores/transcript'
 import Button from 'primevue/button'
 import Slider from 'primevue/slider'
 import Divider from 'primevue/divider'
+import TranscriptPanel from '../TranscriptPanel.vue'
 
 const emit = defineEmits(['collapse'])
 const playerStore = usePlayerStore()
+const transcriptStore = useTranscriptStore()
+
+const activeTab = ref('chapters')
 
 const progressValue = computed({
   get: () => (playerStore.currentTime / playerStore.duration) * 100 || 0,
@@ -19,6 +24,19 @@ const volumeIcon = computed(() => {
   if (playerStore.volume === 0) return 'pi pi-volume-off'
   if (playerStore.volume < 0.5) return 'pi pi-volume-down'
   return 'pi pi-volume-up'
+})
+
+// Load transcript data when switching to transcript tab
+watch(activeTab, async (tab) => {
+  if (tab === 'transcript' && playerStore.currentBook) {
+    const bookId = playerStore.currentBook.id
+    if (transcriptStore.bookId !== bookId || transcriptStore.sentences.length === 0) {
+      await transcriptStore.loadTranscriptionInfo(bookId)
+      if (transcriptStore.hasTranscription) {
+        await transcriptStore.loadTranscriptionData(bookId)
+      }
+    }
+  }
 })
 </script>
 
@@ -152,9 +170,26 @@ const volumeIcon = computed(() => {
 
     <Divider />
 
+    <!-- Tab Toggle -->
+    <div class="tab-toggle">
+      <button
+        class="tab-button"
+        :class="{ active: activeTab === 'chapters' }"
+        @click="activeTab = 'chapters'"
+      >
+        Chapters
+      </button>
+      <button
+        class="tab-button"
+        :class="{ active: activeTab === 'transcript' }"
+        @click="activeTab = 'transcript'"
+      >
+        Transcript
+      </button>
+    </div>
+
     <!-- Chapter List -->
-    <div class="chapters-section">
-      <h3>Chapters</h3>
+    <div v-if="activeTab === 'chapters'" class="chapters-section">
       <div class="chapters-list">
         <div
           v-for="(chapter, index) in playerStore.chapters"
@@ -170,6 +205,16 @@ const volumeIcon = computed(() => {
             class="pi pi-volume-up"
           ></i>
         </div>
+      </div>
+    </div>
+
+    <!-- Transcript -->
+    <div v-else class="transcript-section">
+      <TranscriptPanel v-if="transcriptStore.hasTranscription || transcriptStore.sentences.length > 0" />
+      <div v-else class="no-transcript">
+        <i class="pi pi-align-left"></i>
+        <p>No transcript available</p>
+        <small>Transcribe this book from the book detail page</small>
       </div>
     </div>
   </div>
@@ -314,9 +359,64 @@ const volumeIcon = computed(() => {
   flex: 1;
 }
 
-.chapters-section h3 {
-  font-size: 1rem;
+.tab-toggle {
+  display: flex;
+  gap: 0.25rem;
   margin-bottom: 1rem;
+  background: var(--surface-100);
+  border-radius: 8px;
+  padding: 0.25rem;
+}
+
+.tab-button {
+  flex: 1;
+  padding: 0.5rem 1rem;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-color-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-button.active {
+  background: var(--surface-card);
+  color: var(--text-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.tab-button:hover:not(.active) {
+  color: var(--text-color);
+}
+
+.transcript-section {
+  min-height: 200px;
+  max-height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+
+.no-transcript {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  color: var(--text-color-secondary);
+  text-align: center;
+}
+
+.no-transcript i {
+  font-size: 2rem;
+  opacity: 0.5;
+}
+
+.no-transcript p {
+  margin: 0;
+  font-weight: 500;
 }
 
 .chapters-list {

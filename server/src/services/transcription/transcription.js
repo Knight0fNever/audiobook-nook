@@ -1,6 +1,5 @@
 import { getDb } from '../../database/init.js';
 import { config } from '../../config/index.js';
-import natural from 'natural';
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
@@ -11,8 +10,6 @@ const require = createRequire(import.meta.url);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const tokenizer = new natural.SentenceTokenizer();
 
 // Cached backend detection result
 let detectedBackend = null;
@@ -118,7 +115,7 @@ function canImportVariant(variant) {
  * @returns {string} Path to the model file
  */
 async function ensureModel(modelName) {
-  const modelsDir = config.pdfs.modelsPath;
+  const modelsDir = config.transcription.modelsPath;
   if (!fs.existsSync(modelsDir)) {
     fs.mkdirSync(modelsDir, { recursive: true });
   }
@@ -489,7 +486,7 @@ export function getTranscriptionStatus() {
   const modelSetting = db.prepare("SELECT value FROM settings WHERE key = 'transcription_model'").get();
   const modelName = modelSetting?.value || 'base.en';
 
-  const modelsDir = config.pdfs.modelsPath;
+  const modelsDir = config.transcription.modelsPath;
   const modelFile = `ggml-${modelName}.bin`;
   const modelPath = path.join(modelsDir, modelFile);
   const modelDownloaded = fs.existsSync(modelPath);

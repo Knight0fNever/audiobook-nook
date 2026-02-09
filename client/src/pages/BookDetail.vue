@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '../services/api'
 import { usePlayerStore } from '../stores/player'
 import { useAuthStore } from '../stores/auth'
-import { usePdfFollowAlongStore } from '../stores/pdfFollowAlong'
+import { useTranscriptStore } from '../stores/transcript'
 import Button from 'primevue/button'
 import ProgressBar from 'primevue/progressbar'
 import Tag from 'primevue/tag'
@@ -12,13 +12,12 @@ import Skeleton from 'primevue/skeleton'
 import Divider from 'primevue/divider'
 import { useToast } from 'primevue/usetoast'
 import MetadataSelectionDialog from '../components/MetadataSelectionDialog.vue'
-import PdfUploadDialog from '../components/pdf/PdfUploadDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const playerStore = usePlayerStore()
 const authStore = useAuthStore()
-const pdfStore = usePdfFollowAlongStore()
+const transcriptStore = useTranscriptStore()
 const toast = useToast()
 
 const book = ref(null)
@@ -28,37 +27,33 @@ const enriching = ref(false)
 const showMetadataDialog = ref(false)
 const metadataResults = ref([])
 const metadataSource = ref(null)
-const showPdfUploadDialog = ref(false)
-let pdfStatusPollInterval = null
+let transcriptionPollInterval = null
 
 const isCurrentBook = computed(() => playerStore.currentBook?.id === book.value?.id)
 
-const pdfStatusMessage = computed(() => {
-  const status = pdfStore.jobStatus
+const transcriptionStatusMessage = computed(() => {
+  const status = transcriptStore.jobStatus
   const messages = {
     pending: 'Waiting to start...',
-    extracting: 'Extracting text from PDF...',
     transcribing: 'Transcribing audio (this may take a while)...',
-    aligning: 'Aligning PDF with audio...',
-    completed: 'Processing complete!',
-    failed: 'Processing failed'
+    completed: 'Transcription complete!',
+    failed: 'Transcription failed'
   }
   return messages[status] || 'Processing...'
 })
 
-// Start polling for PDF status when processing
-function startPdfStatusPolling() {
-  if (pdfStatusPollInterval) return
+function startTranscriptionPolling() {
+  if (transcriptionPollInterval) return
 
-  pdfStatusPollInterval = setInterval(async () => {
-    await pdfStore.refreshStatus()
-    if (!pdfStore.isProcessing) {
-      stopPdfStatusPolling()
-      if (pdfStore.isReady) {
+  transcriptionPollInterval = setInterval(async () => {
+    await transcriptStore.refreshStatus()
+    if (!transcriptStore.isProcessing) {
+      stopTranscriptionPolling()
+      if (transcriptStore.hasTranscription) {
         toast.add({
           severity: 'success',
-          summary: 'PDF Ready',
-          detail: 'PDF processing complete. You can now use the follow-along feature.',
+          summary: 'Transcription Ready',
+          detail: 'Transcription complete. Open the player to view the transcript.',
           life: 5000
         })
       }
@@ -66,24 +61,23 @@ function startPdfStatusPolling() {
   }, 2000)
 }
 
-function stopPdfStatusPolling() {
-  if (pdfStatusPollInterval) {
-    clearInterval(pdfStatusPollInterval)
-    pdfStatusPollInterval = null
+function stopTranscriptionPolling() {
+  if (transcriptionPollInterval) {
+    clearInterval(transcriptionPollInterval)
+    transcriptionPollInterval = null
   }
 }
 
-// Watch for processing state changes
-watch(() => pdfStore.isProcessing, (isProcessing) => {
+watch(() => transcriptStore.isProcessing, (isProcessing) => {
   if (isProcessing) {
-    startPdfStatusPolling()
+    startTranscriptionPolling()
   } else {
-    stopPdfStatusPolling()
+    stopTranscriptionPolling()
   }
 }, { immediate: true })
 
 onUnmounted(() => {
-  stopPdfStatusPolling()
+  stopTranscriptionPolling()
 })
 
 onMounted(async () => {
@@ -95,8 +89,8 @@ onMounted(async () => {
     book.value = bookData
     chapters.value = chaptersData
 
-    // Load PDF info
-    pdfStore.loadPdfInfo(parseInt(route.params.id))
+    // Load transcription info
+    transcriptStore.loadTranscriptionInfo(parseInt(route.params.id))
   } catch (error) {
     console.error('Failed to load book:', error)
   } finally {
@@ -121,64 +115,77 @@ function openFullPlayer() {
   router.push('/player')
 }
 
-function openPdfPlayer() {
-  router.push(`/book/${route.params.id}/pdf-player`)
+async function startTranscription() {
+  try {
+    await transcriptStore.startTranscription(parseInt(route.params.id))
+    toast.add({
+      severity: 'info',
+      summary: 'Transcription Started',
+      detail: 'Audio transcription has started. This may take a while.',
+      life: 5000
+    })
+  } catch (error) {
+    toast.add({
+      severity: 'error',
+      summary: 'Transcription Failed',
+      detail: error.message || 'Failed to start transcription',
+      life: 3000
+    })
+  }
 }
 
-function handlePdfUploaded() {
-  toast.add({
-    severity: 'success',
-    summary: 'PDF Uploaded',
-    detail: 'PDF is now being processed. This may take a few minutes.',
-    life: 5000
-  })
-}
-
-async function deletePdf() {
-  if (!confirm('Are you sure you want to delete this PDF? This will also remove all alignment data.')) {
+async function deleteTranscription() {
+  if (!confirm('Are you sure you want to delete this transcription?')) {
     return
   }
 
   try {
-    await pdfStore.deletePdf()
+    await transcriptStore.deleteTranscription()
     toast.add({
       severity: 'success',
-      summary: 'PDF Deleted',
-      detail: 'The PDF has been removed.',
+      summary: 'Transcription Deleted',
+      detail: 'The transcription has been removed.',
       life: 3000
     })
   } catch (error) {
     toast.add({
       severity: 'error',
       summary: 'Delete Failed',
-      detail: error.message || 'Failed to delete PDF',
+      detail: error.message || 'Failed to delete transcription',
       life: 3000
     })
   }
 }
 
-async function cancelPdfProcessing() {
-  if (!confirm('Are you sure you want to cancel PDF processing?')) {
+async function cancelTranscription() {
+  if (!confirm('Are you sure you want to cancel transcription?')) {
     return
   }
 
   try {
-    await pdfStore.cancelProcessing()
-    stopPdfStatusPolling()
+    await transcriptStore.cancelTranscription()
+    stopTranscriptionPolling()
     toast.add({
       severity: 'info',
-      summary: 'Processing Cancelled',
-      detail: 'PDF processing has been cancelled.',
+      summary: 'Transcription Cancelled',
+      detail: 'Transcription has been cancelled.',
       life: 3000
     })
   } catch (error) {
     toast.add({
       severity: 'error',
       summary: 'Cancel Failed',
-      detail: error.message || 'Failed to cancel processing',
+      detail: error.message || 'Failed to cancel transcription',
       life: 3000
     })
   }
+}
+
+async function viewTranscript() {
+  if (!isCurrentBook.value) {
+    await playerStore.loadBook(book.value)
+  }
+  router.push('/player')
 }
 
 function formatDuration(seconds) {
@@ -203,7 +210,6 @@ async function enrichMetadata() {
     const result = await api.searchBookMetadata(route.params.id)
 
     if (result.autoApplied) {
-      // Single result was auto-applied
       book.value = await api.getBook(route.params.id)
       toast.add({
         severity: 'success',
@@ -212,7 +218,6 @@ async function enrichMetadata() {
         life: 3000
       })
     } else if (result.results && result.results.length > 0) {
-      // Multiple results - show selection dialog
       metadataResults.value = result.results
       metadataSource.value = result.source
       showMetadataDialog.value = true
@@ -376,36 +381,36 @@ function getMetadataSourceSeverity(source) {
             />
 
             <Button
-              v-if="pdfStore.hasPdf && pdfStore.isReady"
-              label="PDF Follow-Along"
-              icon="pi pi-file-pdf"
+              v-if="transcriptStore.hasTranscription && !transcriptStore.isProcessing"
+              label="View Transcript"
+              icon="pi pi-align-left"
               severity="help"
-              @click="openPdfPlayer"
+              @click="viewTranscript"
             />
 
             <Button
-              v-else-if="!pdfStore.hasPdf"
-              label="Upload PDF"
-              icon="pi pi-upload"
+              v-if="!transcriptStore.hasTranscription && !transcriptStore.isProcessing"
+              label="Transcribe"
+              icon="pi pi-microphone"
               severity="secondary"
-              @click="showPdfUploadDialog = true"
+              @click="startTranscription"
             />
 
             <Button
-              v-if="pdfStore.hasPdf && !pdfStore.isProcessing"
-              label="Delete PDF"
+              v-if="transcriptStore.hasTranscription && !transcriptStore.isProcessing"
+              label="Delete Transcript"
               icon="pi pi-trash"
               severity="danger"
               outlined
-              @click="deletePdf"
+              @click="deleteTranscription"
             />
           </div>
 
-          <!-- PDF Processing Progress -->
-          <div v-if="pdfStore.hasPdf && pdfStore.isProcessing" class="pdf-processing-section">
-            <div class="pdf-processing-header">
-              <i class="pi pi-file-pdf"></i>
-              <span>Processing PDF</span>
+          <!-- Transcription Processing Progress -->
+          <div v-if="transcriptStore.isProcessing" class="transcription-processing-section">
+            <div class="transcription-processing-header">
+              <i class="pi pi-microphone"></i>
+              <span>Transcribing Audio</span>
               <Button
                 icon="pi pi-times"
                 severity="secondary"
@@ -413,15 +418,15 @@ function getMetadataSourceSeverity(source) {
                 rounded
                 size="small"
                 class="cancel-btn"
-                @click="cancelPdfProcessing"
-                v-tooltip.top="'Cancel processing'"
+                @click="cancelTranscription"
+                v-tooltip.top="'Cancel transcription'"
               />
             </div>
-            <div class="pdf-processing-status">{{ pdfStatusMessage }}</div>
-            <ProgressBar :value="pdfStore.jobProgress" :showValue="true" class="pdf-progress-bar" />
-            <div v-if="pdfStore.pdfInfo?.job?.error" class="pdf-error">
+            <div class="transcription-processing-status">{{ transcriptionStatusMessage }}</div>
+            <ProgressBar :value="transcriptStore.jobProgress" :showValue="true" class="transcription-progress-bar" />
+            <div v-if="transcriptStore.jobError" class="transcription-error">
               <i class="pi pi-exclamation-triangle"></i>
-              {{ pdfStore.pdfInfo.job.error }}
+              {{ transcriptStore.jobError }}
             </div>
           </div>
         </div>
@@ -480,13 +485,6 @@ function getMetadataSourceSeverity(source) {
       :results="metadataResults"
       :source="metadataSource"
       @select="applySelectedMetadata"
-    />
-
-    <PdfUploadDialog
-      v-model:visible="showPdfUploadDialog"
-      :bookId="parseInt(route.params.id)"
-      :bookTitle="book?.title"
-      @uploaded="handlePdfUploaded"
     />
   </div>
 </template>
@@ -604,7 +602,7 @@ function getMetadataSourceSeverity(source) {
   flex-wrap: wrap;
 }
 
-.pdf-processing-section {
+.transcription-processing-section {
   margin-top: 1.5rem;
   padding: 1rem;
   background: var(--surface-100);
@@ -612,7 +610,7 @@ function getMetadataSourceSeverity(source) {
   max-width: 400px;
 }
 
-.pdf-processing-header {
+.transcription-processing-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -621,30 +619,30 @@ function getMetadataSourceSeverity(source) {
   color: var(--primary-color);
 }
 
-.pdf-processing-header i {
+.transcription-processing-header i {
   font-size: 1.2rem;
 }
 
-.pdf-processing-header .cancel-btn {
+.transcription-processing-header .cancel-btn {
   margin-left: auto;
   color: var(--text-color-secondary);
 }
 
-.pdf-processing-header .cancel-btn:hover {
+.transcription-processing-header .cancel-btn:hover {
   color: var(--red-500);
 }
 
-.pdf-processing-status {
+.transcription-processing-status {
   font-size: 0.9rem;
   color: var(--text-color-secondary);
   margin-bottom: 0.75rem;
 }
 
-.pdf-progress-bar {
+.transcription-progress-bar {
   height: 8px;
 }
 
-.pdf-error {
+.transcription-error {
   margin-top: 0.75rem;
   padding: 0.5rem;
   background: var(--red-50);

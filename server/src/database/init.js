@@ -114,6 +114,38 @@ function runMigrations(database) {
       console.error('Migration 2 failed:', error.message);
     }
   }
+
+  // Migration 3: Replace PDF tables with transcription_jobs
+  if (userVersion < 3) {
+    console.log('Running migration 3: Replacing PDF tables with transcription jobs...');
+
+    try {
+      database.exec(`
+        DROP TABLE IF EXISTS pdf_alignment;
+        DROP TABLE IF EXISTS pdf_jobs;
+        DROP TABLE IF EXISTS pdf_documents;
+
+        CREATE TABLE IF NOT EXISTS transcription_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+          status TEXT DEFAULT 'pending' CHECK(status IN ('pending','transcribing','completed','failed','cancelled')),
+          progress INTEGER DEFAULT 0,
+          error_message TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(book_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_transcription_jobs_book ON transcription_jobs(book_id);
+        CREATE INDEX IF NOT EXISTS idx_transcription_jobs_status ON transcription_jobs(status);
+      `);
+
+      database.pragma('user_version = 3');
+      console.log('Migration 3 complete: PDF tables removed, transcription_jobs created');
+    } catch (error) {
+      console.error('Migration 3 failed:', error.message);
+    }
+  }
 }
 
 export async function initializeDatabase() {
