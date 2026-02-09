@@ -21,6 +21,12 @@ const progressValue = computed({
     playerStore.seek((val / 100) * playerStore.duration)
   }
 })
+
+const volumeIcon = computed(() => {
+  if (playerStore.volume === 0) return 'pi pi-volume-off'
+  if (playerStore.volume < 0.5) return 'pi pi-volume-down'
+  return 'pi pi-volume-up'
+})
 </script>
 
 <template>
@@ -35,33 +41,33 @@ const progressValue = computed({
     </div>
 
     <div class="mini-player-content" @click="emit('expand')">
-      <!-- Cover -->
-      <div class="mini-cover">
-        <img
-          v-if="playerStore.currentBook?.cover_url"
-          :src="playerStore.currentBook.cover_url"
-          :alt="playerStore.currentBook.title"
-        />
-        <div v-else class="cover-placeholder">
-          <i class="pi pi-book"></i>
+      <!-- Left: Cover + Info -->
+      <div class="mini-left">
+        <div class="mini-cover">
+          <img
+            v-if="playerStore.currentBook?.cover_url"
+            :src="playerStore.currentBook.cover_url"
+            :alt="playerStore.currentBook.title"
+          />
+          <div v-else class="cover-placeholder">
+            <i class="pi pi-book"></i>
+          </div>
+        </div>
+        <div class="mini-info">
+          <span class="mini-title">{{ playerStore.currentBook?.title }}</span>
+          <div class="mini-meta">
+            <span class="mini-chapter">
+              {{ playerStore.currentChapter?.title || `Chapter ${playerStore.currentChapterIndex + 1}` }}
+            </span>
+            <span class="mini-separator">•</span>
+            <span class="mini-time">
+              {{ playerStore.formattedCurrentTime }} / {{ playerStore.formattedDuration }}
+            </span>
+          </div>
         </div>
       </div>
 
-      <!-- Info -->
-      <div class="mini-info">
-        <span class="mini-title">{{ playerStore.currentBook?.title }}</span>
-        <div class="mini-meta">
-          <span class="mini-chapter">
-            {{ playerStore.currentChapter?.title || `Chapter ${playerStore.currentChapterIndex + 1}` }}
-          </span>
-          <span class="mini-separator">•</span>
-          <span class="mini-time">
-            {{ playerStore.formattedCurrentTime }} / {{ playerStore.formattedDuration }}
-          </span>
-        </div>
-      </div>
-
-      <!-- Controls -->
+      <!-- Center: Playback Controls -->
       <div class="mini-controls" @click.stop>
         <Button
           icon="pi pi-replay"
@@ -83,6 +89,24 @@ const progressValue = computed({
           size="small"
           @click="playerStore.seekRelative(30)"
         />
+      </div>
+
+      <!-- Right: Volume + Expand -->
+      <div class="mini-right" @click.stop>
+        <div class="mini-volume">
+          <Button
+            :icon="volumeIcon"
+            text
+            rounded
+            size="small"
+            @click="playerStore.setVolume(playerStore.volume === 0 ? 1 : 0)"
+          />
+          <Slider
+            :modelValue="playerStore.volume * 100"
+            @update:modelValue="(v) => playerStore.setVolume(v / 100)"
+            class="mini-volume-slider"
+          />
+        </div>
         <Button
           :icon="isExpanded ? 'pi pi-chevron-down' : 'pi pi-chevron-up'"
           text
@@ -105,11 +129,26 @@ const progressValue = computed({
 }
 
 .mini-player-content {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 1rem;
   padding: 0.75rem 1rem;
   cursor: pointer;
+}
+
+.mini-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.mini-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
 .mini-progress-container {
@@ -129,7 +168,7 @@ const progressValue = computed({
   width: 100%;
 }
 
-:deep(.p-slider) {
+.mini-progress-container :deep(.p-slider) {
   height: 4px;
   background: rgba(0, 0, 0, 0.1) !important;
   border-radius: 2px;
@@ -140,13 +179,13 @@ const progressValue = computed({
   height: 6px;
 }
 
-:deep(.p-slider-range) {
+.mini-progress-container :deep(.p-slider-range) {
   background: #10b981 !important;
   border-radius: 2px;
   height: 100%;
 }
 
-:deep(.p-slider-handle) {
+.mini-progress-container :deep(.p-slider-handle) {
   width: 14px;
   height: 14px;
   opacity: 1;
@@ -230,8 +269,40 @@ const progressValue = computed({
 .mini-controls {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.25rem;
+}
+
+.mini-volume {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   flex-shrink: 0;
+}
+
+.mini-volume-slider {
+  width: 80px;
+}
+
+.mini-volume :deep(.p-slider) {
+  height: 4px;
+  background: rgba(0, 0, 0, 0.1) !important;
+  border-radius: 2px;
+}
+
+.mini-volume :deep(.p-slider-range) {
+  background: #10b981 !important;
+  border-radius: 2px;
+  height: 100%;
+}
+
+.mini-volume :deep(.p-slider-handle) {
+  width: 12px;
+  height: 12px;
+  background: white;
+  border: none;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 @media (max-width: 768px) {
@@ -250,6 +321,10 @@ const progressValue = computed({
   }
 
   .mini-controls .p-button-text {
+    display: none;
+  }
+
+  .mini-volume {
     display: none;
   }
 }
