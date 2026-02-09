@@ -3,77 +3,246 @@ import { config } from '../../config/index.js';
 import natural from 'natural';
 import path from 'path';
 import fs from 'fs';
+import https from 'https';
 import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
+import { createRequire } from 'module';
 
-// Load .env before accessing env vars (needed because this module loads early)
-dotenv.config();
+const require = createRequire(import.meta.url);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Add whisper-node's binary directory to PATH so whisper-cli.exe can be found
-// This must be done BEFORE importing/calling the whisper module
-// Supports WHISPER_WIN_FLAVOR env var: 'cpu' (default), 'blas' (OpenBLAS), 'cublas-11.8', 'cublas-12.4'
-if (process.platform === 'win32') {
-  const whisperBaseDir = path.join(__dirname, '../../../node_modules/@lumen-labs-dev/whisper-node/lib/whisper.cpp');
-  const flavor = (process.env.WHISPER_WIN_FLAVOR || 'cpu').toLowerCase();
+const tokenizer = new natural.SentenceTokenizer();
 
-  const flavorDirs = {
-    'cpu': 'Win64',
-    'blas': 'BlasWin64',
-    'cublas-11.8': 'CublasWin64-11.8',
-    'cublas-12.4': 'CublasWin64-12.4'
-  };
+// Cached backend detection result
+let detectedBackend = null;
 
-  const binDirName = flavorDirs[flavor] || 'Win64';
-  const whisperBinDir = path.join(whisperBaseDir, binDirName);
+// Persistent whisper context (reused across transcriptions)
+let whisperContext = null;
+let whisperContextModel = null;
 
-  if (fs.existsSync(whisperBinDir)) {
-    const currentPath = process.env.PATH || '';
-    if (!currentPath.includes(whisperBinDir)) {
-      process.env.PATH = whisperBinDir + path.delimiter + currentPath;
-      console.log(`[Transcription] Using whisper flavor: ${flavor}`);
-      console.log('[Transcription] Added whisper binary directory to PATH:', whisperBinDir);
-    }
+/**
+ * Detect the best available transcription backend
+ * Reads transcription_backend setting from DB ('auto', 'metal', 'cuda', 'vulkan', 'cpu')
+ * @returns {{ name: string, gpu: boolean, variant: string|null, reason: string }}
+ */
+function detectBackend() {
+  if (detectedBackend) return detectedBackend;
+
+  const db = getDb();
+  const setting = db.prepare("SELECT value FROM settings WHERE key = 'transcription_backend'").get();
+  const preference = setting?.value || 'auto';
+
+  const platform = process.platform;
+  const arch = process.arch;
+
+  console.log(`[Transcription] Platform: ${platform}-${arch}`);
+  console.log(`[Transcription] Backend preference: ${preference}`);
+
+  if (preference === 'auto') {
+    detectedBackend = autoDetectBackend(platform, arch);
   } else {
-    console.warn(`[Transcription] Whisper binary directory not found for flavor '${flavor}': ${whisperBinDir}`);
-    // Fallback to CPU
-    const fallbackDir = path.join(whisperBaseDir, 'Win64');
-    if (fs.existsSync(fallbackDir)) {
-      process.env.PATH = fallbackDir + path.delimiter + (process.env.PATH || '');
-      console.log('[Transcription] Falling back to CPU flavor');
+    detectedBackend = manualBackend(preference, platform, arch);
+  }
+
+  console.log(`[Transcription] Backend: ${detectedBackend.name} (${detectedBackend.reason})`);
+  console.log(`[Transcription] GPU: ${detectedBackend.gpu ? 'enabled' : 'disabled'}`);
+
+  return detectedBackend;
+}
+
+/**
+ * Auto-detect the best backend for the current platform
+ */
+function autoDetectBackend(platform, arch) {
+  if (platform === 'darwin' && arch === 'arm64') {
+    return { name: 'metal', gpu: true, variant: null, reason: 'auto-detected (macOS Apple Silicon)' };
+  }
+
+  if (platform === 'darwin' && arch === 'x64') {
+    return { name: 'cpu', gpu: false, variant: null, reason: 'auto-detected (macOS Intel - no Metal)' };
+  }
+
+  // Windows/Linux: try CUDA, then Vulkan, then CPU
+  if (platform === 'win32' || platform === 'linux') {
+    // Try CUDA variant
+    if (canImportVariant('cuda')) {
+      return { name: 'cuda', gpu: true, variant: 'cuda', reason: 'auto-detected (CUDA available)' };
     }
+
+    // Try Vulkan variant
+    if (canImportVariant('vulkan')) {
+      return { name: 'vulkan', gpu: true, variant: 'vulkan', reason: 'auto-detected (Vulkan available)' };
+    }
+
+    return { name: 'cpu', gpu: false, variant: null, reason: 'auto-detected (no GPU variant found)' };
+  }
+
+  return { name: 'cpu', gpu: false, variant: null, reason: 'auto-detected (unknown platform)' };
+}
+
+/**
+ * Use manually specified backend
+ */
+function manualBackend(preference, platform, arch) {
+  switch (preference) {
+    case 'metal':
+      return { name: 'metal', gpu: true, variant: null, reason: 'manual override' };
+    case 'cuda':
+      return { name: 'cuda', gpu: true, variant: 'cuda', reason: 'manual override' };
+    case 'vulkan':
+      return { name: 'vulkan', gpu: true, variant: 'vulkan', reason: 'manual override' };
+    case 'cpu':
+    default:
+      return { name: 'cpu', gpu: false, variant: null, reason: 'manual override' };
   }
 }
 
-const tokenizer = new natural.SentenceTokenizer();
-
-// Whisper availability flag - set after first check
-let whisperModule = null;
-let whisperChecked = false;
+/**
+ * Check if a whisper variant package can be imported
+ * Package naming: @fugood/node-whisper-{platform}-{arch}-{variant}
+ */
+function canImportVariant(variant) {
+  try {
+    const pkg = `@fugood/node-whisper-${process.platform}-${process.arch}-${variant}`;
+    require.resolve(pkg);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
- * Dynamically load the whisper module
- * Using dynamic import to handle potential initialization errors
+ * Ensure the whisper model file exists, download if missing
+ * @param {string} modelName - Model name (e.g., 'base.en', 'small', 'medium')
+ * @returns {string} Path to the model file
  */
-async function getWhisper() {
-  if (whisperChecked) {
-    return whisperModule;
+async function ensureModel(modelName) {
+  const modelsDir = config.pdfs.modelsPath;
+  if (!fs.existsSync(modelsDir)) {
+    fs.mkdirSync(modelsDir, { recursive: true });
   }
+
+  const modelFile = `ggml-${modelName}.bin`;
+  const modelPath = path.join(modelsDir, modelFile);
+
+  if (fs.existsSync(modelPath)) {
+    console.log(`[Transcription] Model: ${modelName} → ${modelPath}`);
+    return modelPath;
+  }
+
+  // Download from Hugging Face
+  const url = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${modelFile}`;
+  console.log(`[Transcription] Downloading model ${modelName} from ${url}...`);
+
+  await downloadFile(url, modelPath);
+  console.log(`[Transcription] Model downloaded: ${modelPath}`);
+  return modelPath;
+}
+
+/**
+ * Download a file from a URL to a local path (follows redirects)
+ */
+function downloadFile(url, destPath) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = destPath + '.tmp';
+    const file = fs.createWriteStream(tmpPath);
+
+    function doRequest(requestUrl) {
+      https.get(requestUrl, (response) => {
+        // Follow redirects
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          file.close();
+          doRequest(response.headers.location);
+          return;
+        }
+
+        if (response.statusCode !== 200) {
+          file.close();
+          fs.unlinkSync(tmpPath);
+          reject(new Error(`Download failed with status ${response.statusCode}`));
+          return;
+        }
+
+        response.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          fs.renameSync(tmpPath, destPath);
+          resolve();
+        });
+      }).on('error', (err) => {
+        file.close();
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+        reject(err);
+      });
+    }
+
+    doRequest(url);
+  });
+}
+
+/**
+ * Get or create a persistent whisper context
+ * Reuses context across transcriptions to avoid reloading the model
+ */
+async function getWhisperContext() {
+  const backend = detectBackend();
+
+  const db = getDb();
+  const modelSetting = db.prepare("SELECT value FROM settings WHERE key = 'transcription_model'").get();
+  const modelName = modelSetting?.value || 'base.en';
+
+  // If context exists for the same model, reuse it
+  if (whisperContext && whisperContextModel === modelName) {
+    return whisperContext;
+  }
+
+  // Release old context if model changed
+  if (whisperContext) {
+    try {
+      await whisperContext.release();
+    } catch (e) {
+      console.warn('[Transcription] Error releasing old context:', e.message);
+    }
+    whisperContext = null;
+    whisperContextModel = null;
+  }
+
+  const modelPath = await ensureModel(modelName);
 
   try {
-    const module = await import('@lumen-labs-dev/whisper-node');
-    // The package exports { whisper } as a named export
-    whisperModule = module.whisper;
-    console.log('[Transcription] Whisper module loaded successfully, type:', typeof whisperModule);
-  } catch (error) {
-    console.error('[Transcription] Failed to load whisper module:', error.message);
-    whisperModule = null;
-  }
+    const { initWhisper } = await import('@fugood/whisper.node');
 
-  whisperChecked = true;
-  return whisperModule;
+    const initOptions = {
+      model: modelPath,
+      useGpu: backend.gpu
+    };
+
+    whisperContext = await initWhisper(initOptions, backend.variant || undefined);
+    whisperContextModel = modelName;
+
+    console.log(`[Transcription] Whisper context created (model: ${modelName}, gpu: ${backend.gpu})`);
+    return whisperContext;
+  } catch (error) {
+    console.error('[Transcription] Failed to initialize whisper:', error.message);
+
+    // If GPU failed, try CPU fallback
+    if (backend.gpu) {
+      console.log('[Transcription] Retrying with CPU fallback...');
+      try {
+        const { initWhisper } = await import('@fugood/whisper.node');
+        whisperContext = await initWhisper({ model: modelPath, useGpu: false });
+        whisperContextModel = modelName;
+        detectedBackend = { name: 'cpu', gpu: false, variant: null, reason: 'fallback after GPU failure' };
+        console.log('[Transcription] CPU fallback successful');
+        return whisperContext;
+      } catch (fallbackError) {
+        console.error('[Transcription] CPU fallback also failed:', fallbackError.message);
+      }
+    }
+
+    return null;
+  }
 }
 
 /**
@@ -158,10 +327,16 @@ async function transcribeChapter(audioPath) {
     throw new Error(`Audio file not found: ${audioPath}`);
   }
 
-  // Try to get whisper module
-  const whisper = await getWhisper();
+  // Try to get whisper context
+  let context;
+  try {
+    context = await getWhisperContext();
+  } catch (error) {
+    console.error('[Transcription] Error getting whisper context:', error.message);
+    context = null;
+  }
 
-  if (!whisper) {
+  if (!context) {
     console.log('[Transcription] Whisper not available, using fallback');
     return createSyntheticTranscription(audioPath);
   }
@@ -169,16 +344,18 @@ async function transcribeChapter(audioPath) {
   try {
     console.log(`[Transcription] Running whisper on: ${audioPath}`);
 
-    // Use @lumen-labs-dev/whisper-node which auto-converts MP3 to WAV
-    // Returns array of { start, end, speech }
-    const result = await whisper(audioPath, {
-      modelName: config.pdfs.whisperModel || 'base',
-      whisperOptions: {
-        language: 'en'
-      }
+    // Get language setting from DB
+    const db = getDb();
+    const langSetting = db.prepare("SELECT value FROM settings WHERE key = 'transcription_language'").get();
+    const language = langSetting?.value || 'en';
+
+    const { stop, promise } = context.transcribeFile(audioPath, {
+      language: language === 'auto' ? undefined : language
     });
 
-    console.log(`[Transcription] Whisper returned ${result?.length || 0} segments`);
+    const result = await promise;
+
+    console.log(`[Transcription] Whisper returned ${result?.segments?.length || 0} segments`);
 
     // Convert whisper output to our sentence format
     const sentences = parseWhisperOutput(result);
@@ -190,7 +367,7 @@ async function transcribeChapter(audioPath) {
   } catch (error) {
     console.error('[Transcription] Whisper error:', error.message);
 
-    // Fallback: create synthetic transcription data for testing
+    // Fallback: create synthetic transcription data
     console.log('[Transcription] Using fallback synthetic transcription');
     return createSyntheticTranscription(audioPath);
   }
@@ -198,10 +375,12 @@ async function transcribeChapter(audioPath) {
 
 /**
  * Parse whisper output into sentence-level segments
- * Input format: [{ start: "00:00:14.310", end: "00:00:16.480", speech: "howdy" }]
+ * @fugood/whisper.node returns: { result: string, segments: [{ text, t0, t1 }], ... }
+ * where t0 and t1 are timestamps in milliseconds
  */
 function parseWhisperOutput(whisperResult) {
-  if (!whisperResult || !Array.isArray(whisperResult)) {
+  const segments = whisperResult?.segments;
+  if (!segments || !Array.isArray(segments)) {
     return [];
   }
 
@@ -212,10 +391,12 @@ function parseWhisperOutput(whisperResult) {
     end: 0
   };
 
-  for (const segment of whisperResult) {
-    const text = segment.speech || '';
-    const startSeconds = parseTimestamp(segment.start);
-    const endSeconds = parseTimestamp(segment.end);
+  for (const segment of segments) {
+    const text = (segment.text || '').trim();
+    if (!text) continue;
+
+    const startSeconds = segment.t0 / 1000;
+    const endSeconds = segment.t1 / 1000;
 
     // Accumulate text
     if (currentSentence.text === '') {
@@ -247,29 +428,6 @@ function parseWhisperOutput(whisperResult) {
   }
 
   return sentences;
-}
-
-/**
- * Parse timestamp string "HH:MM:SS.mmm" to seconds
- */
-function parseTimestamp(timestamp) {
-  if (typeof timestamp === 'number') {
-    return timestamp;
-  }
-
-  if (!timestamp || typeof timestamp !== 'string') {
-    return 0;
-  }
-
-  const parts = timestamp.split(':');
-  if (parts.length === 3) {
-    const hours = parseFloat(parts[0]) || 0;
-    const minutes = parseFloat(parts[1]) || 0;
-    const seconds = parseFloat(parts[2]) || 0;
-    return hours * 3600 + minutes * 60 + seconds;
-  }
-
-  return parseFloat(timestamp) || 0;
 }
 
 /**
@@ -313,4 +471,62 @@ async function createSyntheticTranscription(audioPath) {
     sentences,
     isSynthetic: true
   };
+}
+
+/**
+ * Get the current transcription system status
+ * @returns {Object} Status including backend, GPU, model, platform info
+ */
+export function getTranscriptionStatus() {
+  let backend;
+  try {
+    backend = detectBackend();
+  } catch {
+    backend = { name: 'unavailable', gpu: false, variant: null, reason: 'database not ready' };
+  }
+
+  const db = getDb();
+  const modelSetting = db.prepare("SELECT value FROM settings WHERE key = 'transcription_model'").get();
+  const modelName = modelSetting?.value || 'base.en';
+
+  const modelsDir = config.pdfs.modelsPath;
+  const modelFile = `ggml-${modelName}.bin`;
+  const modelPath = path.join(modelsDir, modelFile);
+  const modelDownloaded = fs.existsSync(modelPath);
+
+  let whisperAvailable = false;
+  try {
+    // Check if the base package is resolvable
+    require.resolve('@fugood/whisper.node');
+    whisperAvailable = true;
+  } catch {
+    whisperAvailable = false;
+  }
+
+  return {
+    available: whisperAvailable,
+    backend: backend.name,
+    gpu: backend.gpu,
+    variant: backend.variant,
+    reason: backend.reason,
+    model: modelName,
+    modelDownloaded,
+    modelPath: modelDownloaded ? modelPath : null,
+    platform: `${process.platform}-${process.arch}`
+  };
+}
+
+/**
+ * Reset cached backend detection (called when settings change)
+ */
+export function resetBackendDetection() {
+  detectedBackend = null;
+  // Also release whisper context so it reinitializes with new settings
+  if (whisperContext) {
+    whisperContext.release().catch(e => {
+      console.warn('[Transcription] Error releasing context on reset:', e.message);
+    });
+    whisperContext = null;
+    whisperContextModel = null;
+  }
 }

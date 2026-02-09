@@ -209,6 +209,10 @@ class ApiService {
     return this.request('DELETE', '/admin/metadata/cache')
   }
 
+  async getTranscriptionStatus() {
+    return this.request('GET', '/admin/transcription/status')
+  }
+
   // PDF Follow-Along
   async getPdfInfo(bookId) {
     return this.request('GET', `/pdf/books/${bookId}`)

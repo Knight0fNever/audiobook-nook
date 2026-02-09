@@ -7,6 +7,7 @@ import { scanLibrary, getScanStatus } from '../services/scanner/index.js';
 import { enrichBookMetadata, updateBookWithEnrichedData, searchMultipleResults } from '../services/metadata/apiEnrichment.js';
 import { clearCache, getCacheStats } from '../services/metadata/apiCache.js';
 import { extractMetadata } from '../services/metadata/index.js';
+import { getTranscriptionStatus, resetBackendDetection } from '../services/pdf/transcription.js';
 import { config } from '../config/index.js';
 import path from 'path';
 import fs from 'fs';
@@ -268,7 +269,10 @@ adminRouter.put('/settings', (req, res, next) => {
       api_enrichment_enabled,
       api_enrichment_prefer_api_covers,
       api_enrichment_rate_limit_delay,
-      google_books_api_key
+      google_books_api_key,
+      transcription_backend,
+      transcription_model,
+      transcription_language
     } = req.body;
 
     const updateSetting = db.prepare(`
@@ -296,6 +300,17 @@ adminRouter.put('/settings', (req, res, next) => {
     if (google_books_api_key !== undefined) {
       updateSetting.run('google_books_api_key', google_books_api_key);
     }
+    if (transcription_backend !== undefined) {
+      updateSetting.run('transcription_backend', transcription_backend);
+      resetBackendDetection();
+    }
+    if (transcription_model !== undefined) {
+      updateSetting.run('transcription_model', transcription_model);
+      resetBackendDetection();
+    }
+    if (transcription_language !== undefined) {
+      updateSetting.run('transcription_language', transcription_language);
+    }
 
     // Return updated settings
     const settings = db.prepare('SELECT * FROM settings').all();
@@ -305,6 +320,18 @@ adminRouter.put('/settings', (req, res, next) => {
     }
 
     res.json(settingsObj);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==================== TRANSCRIPTION ====================
+
+// GET /api/admin/transcription/status - Get transcription backend status
+adminRouter.get('/transcription/status', (req, res, next) => {
+  try {
+    const status = getTranscriptionStatus();
+    res.json(status);
   } catch (error) {
     next(error);
   }

@@ -103,6 +103,7 @@ Server config in `server/.env`:
 - `DATABASE_PATH` - SQLite file location (default: `./data/database.sqlite`)
 - `GOOGLE_BOOKS_API_KEY` - Optional API key for higher rate limits
 - `API_ENRICHMENT_TIMEOUT` - API request timeout (default: 10000ms)
+- `WHISPER_MODELS_PATH` - Directory for whisper model files (default: `./data/models`)
 
 ## Default Credentials
 

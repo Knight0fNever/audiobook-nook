@@ -260,7 +260,10 @@ export async function initializeDatabase() {
     api_enrichment_enabled: 'true',
     api_enrichment_prefer_api_covers: 'true',
     api_enrichment_rate_limit_delay: '600',
-    google_books_api_key: ''
+    google_books_api_key: '',
+    transcription_backend: 'auto',
+    transcription_model: 'base.en',
+    transcription_language: 'en'
   };
 
   const insertSetting = db.prepare(`

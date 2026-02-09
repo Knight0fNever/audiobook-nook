@@ -7,6 +7,8 @@ import Button from 'primevue/button'
 import Card from 'primevue/card'
 import InputText from 'primevue/inputtext'
 import InputSwitch from 'primevue/inputswitch'
+import Dropdown from 'primevue/dropdown'
+import Tag from 'primevue/tag'
 
 const router = useRouter()
 const toast = useToast()
@@ -18,14 +20,55 @@ const settings = ref({
   api_enrichment_enabled: true,
   api_enrichment_prefer_api_covers: true,
   api_enrichment_rate_limit_delay: '600',
-  google_books_api_key: ''
+  google_books_api_key: '',
+  transcription_backend: 'auto',
+  transcription_model: 'base.en',
+  transcription_language: 'en'
 })
 const loading = ref(true)
 const saving = ref(false)
+const transcriptionStatus = ref(null)
+
+const backendOptions = [
+  { label: 'Auto-Detect (Recommended)', value: 'auto' },
+  { label: 'Metal (macOS Apple Silicon)', value: 'metal' },
+  { label: 'CUDA (NVIDIA GPU)', value: 'cuda' },
+  { label: 'Vulkan (Cross-platform GPU)', value: 'vulkan' },
+  { label: 'CPU Only', value: 'cpu' }
+]
+
+const modelOptions = [
+  { label: 'tiny (~75MB, fastest)', value: 'tiny' },
+  { label: 'tiny.en (~75MB, fastest, English only)', value: 'tiny.en' },
+  { label: 'base (~142MB, fast)', value: 'base' },
+  { label: 'base.en (~142MB, fast, English only)', value: 'base.en' },
+  { label: 'small (~466MB, balanced)', value: 'small' },
+  { label: 'small.en (~466MB, balanced, English only)', value: 'small.en' },
+  { label: 'medium (~1.5GB, accurate)', value: 'medium' },
+  { label: 'medium.en (~1.5GB, accurate, English only)', value: 'medium.en' },
+  { label: 'large (~2.9GB, most accurate)', value: 'large-v3' }
+]
+
+const languageOptions = [
+  { label: 'English', value: 'en' },
+  { label: 'Auto-Detect', value: 'auto' },
+  { label: 'Spanish', value: 'es' },
+  { label: 'French', value: 'fr' },
+  { label: 'German', value: 'de' },
+  { label: 'Italian', value: 'it' },
+  { label: 'Portuguese', value: 'pt' },
+  { label: 'Japanese', value: 'ja' },
+  { label: 'Chinese', value: 'zh' },
+  { label: 'Korean', value: 'ko' },
+  { label: 'Russian', value: 'ru' }
+]
 
 onMounted(async () => {
   try {
-    const data = await api.getSettings()
+    const [data, txStatus] = await Promise.all([
+      api.getSettings(),
+      api.getTranscriptionStatus().catch(() => null)
+    ])
     settings.value = {
       library_path: data.library_path || '',
       scan_schedule: data.scan_schedule || '',
@@ -33,8 +76,12 @@ onMounted(async () => {
       api_enrichment_enabled: data.api_enrichment_enabled !== 'false',
       api_enrichment_prefer_api_covers: data.api_enrichment_prefer_api_covers !== 'false',
       api_enrichment_rate_limit_delay: data.api_enrichment_rate_limit_delay || '600',
-      google_books_api_key: data.google_books_api_key || ''
+      google_books_api_key: data.google_books_api_key || '',
+      transcription_backend: data.transcription_backend || 'auto',
+      transcription_model: data.transcription_model || 'base.en',
+      transcription_language: data.transcription_language || 'en'
     }
+    transcriptionStatus.value = txStatus
   } catch (error) {
     console.error('Failed to load settings:', error)
   } finally {
@@ -53,8 +100,14 @@ async function saveSettings() {
       api_enrichment_enabled: settings.value.api_enrichment_enabled,
       api_enrichment_prefer_api_covers: settings.value.api_enrichment_prefer_api_covers,
       api_enrichment_rate_limit_delay: settings.value.api_enrichment_rate_limit_delay,
-      google_books_api_key: settings.value.google_books_api_key
+      google_books_api_key: settings.value.google_books_api_key,
+      transcription_backend: settings.value.transcription_backend,
+      transcription_model: settings.value.transcription_model,
+      transcription_language: settings.value.transcription_language
     })
+
+    // Refresh transcription status after save (backend may have changed)
+    transcriptionStatus.value = await api.getTranscriptionStatus().catch(() => null)
 
     toast.add({
       severity: 'success',
@@ -113,6 +166,67 @@ async function saveSettings() {
               placeholder="0 0 * * *"
             />
             <small>Leave empty to disable scheduled scans. Example: "0 0 * * *" for daily at midnight</small>
+          </div>
+        </template>
+      </Card>
+
+      <Card>
+        <template #title>
+          <div class="card-title-row">
+            <span>Transcription (PDF Follow-Along)</span>
+            <Tag
+              v-if="transcriptionStatus"
+              :value="transcriptionStatus.backend?.toUpperCase() || 'UNKNOWN'"
+              :severity="transcriptionStatus.gpu ? 'success' : transcriptionStatus.available ? 'info' : 'danger'"
+            />
+          </div>
+        </template>
+        <template #content>
+          <div v-if="transcriptionStatus" class="status-info">
+            <small>
+              Platform: {{ transcriptionStatus.platform }}
+              &bull; GPU: {{ transcriptionStatus.gpu ? 'Enabled' : 'Disabled' }}
+              &bull; Model: {{ transcriptionStatus.modelDownloaded ? 'Downloaded' : 'Not downloaded (will download on first use)' }}
+            </small>
+          </div>
+
+          <div class="form-group">
+            <label for="transcription_backend">Backend</label>
+            <Dropdown
+              id="transcription_backend"
+              v-model="settings.transcription_backend"
+              :options="backendOptions"
+              optionLabel="label"
+              optionValue="value"
+              class="w-full"
+            />
+            <small>Select the compute backend for audio transcription. Auto-detect picks the best option for your system.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="transcription_model">Model</label>
+            <Dropdown
+              id="transcription_model"
+              v-model="settings.transcription_model"
+              :options="modelOptions"
+              optionLabel="label"
+              optionValue="value"
+              class="w-full"
+            />
+            <small>Larger models are more accurate but slower and require more memory. Models download automatically on first use.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="transcription_language">Language</label>
+            <Dropdown
+              id="transcription_language"
+              v-model="settings.transcription_language"
+              :options="languageOptions"
+              optionLabel="label"
+              optionValue="value"
+              class="w-full"
+            />
+            <small>Language of your audiobooks. Use Auto-Detect for mixed-language libraries.</small>
           </div>
         </template>
       </Card>
@@ -259,6 +373,24 @@ async function saveSettings() {
 .switch-group label {
   margin: 0;
   font-weight: 500;
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.status-info {
+  margin-bottom: 1.25rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-ground);
+  border-radius: var(--border-radius);
+}
+
+.status-info small {
+  color: var(--text-color-secondary);
 }
 
 .actions {
