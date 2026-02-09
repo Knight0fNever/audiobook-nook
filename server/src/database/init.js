@@ -146,6 +146,25 @@ function runMigrations(database) {
       console.error('Migration 3 failed:', error.message);
     }
   }
+
+  // Migration 4: Add status_message to transcription_jobs
+  if (userVersion < 4) {
+    console.log('Running migration 4: Adding status_message to transcription_jobs...');
+
+    try {
+      const tableInfo = database.pragma('table_info(transcription_jobs)');
+      const columnNames = tableInfo.map(col => col.name);
+
+      if (!columnNames.includes('status_message')) {
+        database.exec(`ALTER TABLE transcription_jobs ADD COLUMN status_message TEXT`);
+      }
+
+      database.pragma('user_version = 4');
+      console.log('Migration 4 complete: status_message column added');
+    } catch (error) {
+      console.error('Migration 4 failed:', error.message);
+    }
+  }
 }
 
 export async function initializeDatabase() {

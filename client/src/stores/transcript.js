@@ -12,6 +12,7 @@ export const useTranscriptStore = defineStore('transcript', () => {
   const jobStatus = ref(null)
   const jobProgress = ref(0)
   const jobError = ref(null)
+  const jobStatusMessage = ref(null)
   const hasTranscription = ref(false)
   const autoScroll = ref(true)
   const loading = ref(false)
@@ -83,6 +84,7 @@ export const useTranscriptStore = defineStore('transcript', () => {
       jobStatus.value = info.status
       jobProgress.value = info.progress
       jobError.value = info.error
+      jobStatusMessage.value = info.statusMessage
       hasTranscription.value = info.hasTranscription
     } catch (err) {
       console.error('Failed to load transcription info:', err)
@@ -155,6 +157,7 @@ export const useTranscriptStore = defineStore('transcript', () => {
       jobStatus.value = info.status
       jobProgress.value = info.progress
       jobError.value = info.error
+      jobStatusMessage.value = info.statusMessage
       hasTranscription.value = info.hasTranscription
     } catch (err) {
       console.error('Failed to refresh transcription status:', err)
@@ -194,6 +197,7 @@ export const useTranscriptStore = defineStore('transcript', () => {
     jobStatus.value = null
     jobProgress.value = 0
     jobError.value = null
+    jobStatusMessage.value = null
     hasTranscription.value = false
     autoScroll.value = true
     loading.value = false
@@ -206,6 +210,7 @@ export const useTranscriptStore = defineStore('transcript', () => {
     jobStatus,
     jobProgress,
     jobError,
+    jobStatusMessage,
     hasTranscription,
     autoScroll,
     loading,

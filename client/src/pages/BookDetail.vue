@@ -32,10 +32,14 @@ let transcriptionPollInterval = null
 const isCurrentBook = computed(() => playerStore.currentBook?.id === book.value?.id)
 
 const transcriptionStatusMessage = computed(() => {
+  // Prefer server-provided status message (e.g. "Downloading model...", "Transcribing chapter 2 of 5...")
+  if (transcriptStore.jobStatusMessage) {
+    return transcriptStore.jobStatusMessage
+  }
   const status = transcriptStore.jobStatus
   const messages = {
     pending: 'Waiting to start...',
-    transcribing: 'Transcribing audio (this may take a while)...',
+    transcribing: 'Transcribing audio...',
     completed: 'Transcription complete!',
     failed: 'Transcription failed'
   }

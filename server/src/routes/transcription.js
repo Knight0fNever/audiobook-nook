@@ -62,7 +62,7 @@ transcriptionRouter.get('/books/:bookId/status', (req, res, next) => {
     const bookId = parseInt(req.params.bookId);
 
     const job = db.prepare(
-      'SELECT id, status, progress, error_message, updated_at FROM transcription_jobs WHERE book_id = ?'
+      'SELECT id, status, progress, error_message, status_message, updated_at FROM transcription_jobs WHERE book_id = ?'
     ).get(bookId);
 
     // Count chapters and transcribed chapters
@@ -80,6 +80,7 @@ transcriptionRouter.get('/books/:bookId/status', (req, res, next) => {
       status: job?.status || null,
       progress: job?.progress || 0,
       error: job?.error_message || null,
+      statusMessage: job?.status_message || null,
       hasTranscription,
       chapterCount,
       transcribedCount

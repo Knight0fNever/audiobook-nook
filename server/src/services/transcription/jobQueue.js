@@ -31,7 +31,7 @@ function isJobCancelled(jobId) {
 }
 
 // Update job status in database
-function updateJobStatus(jobId, status, progress = null, errorMessage = null) {
+function updateJobStatus(jobId, status, progress = null, errorMessage = null, statusMessage = null) {
   const db = getDb();
   if (errorMessage) {
     db.prepare(`
@@ -39,19 +39,21 @@ function updateJobStatus(jobId, status, progress = null, errorMessage = null) {
         status = ?,
         progress = COALESCE(?, progress),
         error_message = ?,
+        status_message = COALESCE(?, status_message),
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(status, progress, errorMessage, jobId);
+    `).run(status, progress, errorMessage, statusMessage, jobId);
   } else {
     db.prepare(`
       UPDATE transcription_jobs SET
         status = ?,
         progress = COALESCE(?, progress),
+        status_message = COALESCE(?, status_message),
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(status, progress, jobId);
+    `).run(status, progress, statusMessage, jobId);
   }
-  console.log(`[JobQueue] Job ${jobId} status: ${status} (${progress}%)`);
+  console.log(`[JobQueue] Job ${jobId} status: ${status} (${progress}%)${statusMessage ? ` - ${statusMessage}` : ''}`);
 }
 
 // Process next job in queue
@@ -74,13 +76,13 @@ async function processNext() {
     }
 
     // Start transcription
-    updateJobStatus(jobId, 'transcribing', 5);
+    updateJobStatus(jobId, 'transcribing', 5, null, 'Preparing...');
 
-    const transcription = await transcribeBook(bookId, (progress) => {
+    const transcription = await transcribeBook(bookId, (progress, statusMessage) => {
       if (isJobCancelled(jobId)) return;
       // Map transcription progress (0-100) to job progress (5-95)
       const jobProgress = 5 + Math.round(progress * 0.9);
-      updateJobStatus(jobId, 'transcribing', jobProgress);
+      updateJobStatus(jobId, 'transcribing', jobProgress, null, statusMessage || null);
     });
 
     if (isJobCancelled(jobId)) {
