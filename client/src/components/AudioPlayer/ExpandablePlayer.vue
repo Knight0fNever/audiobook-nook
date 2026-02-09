@@ -44,13 +44,14 @@ onUnmounted(() => {
       <div v-if="isExpanded" class="player-backdrop" @click="handleBackdropClick"></div>
     </Transition>
 
-    <!-- Mini Player (always visible when not expanded) -->
-    <MiniPlayerContent v-if="!isExpanded" :is-expanded="false" @expand="toggleExpanded" />
+    <!-- Mini Player (slides away when expanded) -->
+    <Transition name="mini-slide">
+      <MiniPlayerContent v-if="!isExpanded" :is-expanded="false" @expand="toggleExpanded" />
+    </Transition>
 
     <!-- Full Player Container (slides up like a drawer) -->
     <Transition name="drawer">
       <div v-if="isExpanded" class="player-container-expanded">
-        <MiniPlayerContent :is-expanded="true" @expand="toggleExpanded" />
         <FullPlayerContent @collapse="toggleExpanded" />
       </div>
     </Transition>
@@ -83,7 +84,7 @@ onUnmounted(() => {
   right: 0;
   height: 100vh;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   background-color: var(--app-bg);
   z-index: 1000;
 }
@@ -108,5 +109,16 @@ onUnmounted(() => {
 .drawer-enter-from,
 .drawer-leave-to {
   transform: translateY(calc(100vh - 90px));
+}
+
+/* Mini player slide-down transitions */
+.mini-slide-enter-active,
+.mini-slide-leave-active {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mini-slide-enter-from,
+.mini-slide-leave-to {
+  transform: translateY(100%);
 }
 </style>
