@@ -79,7 +79,7 @@ async function triggerScan() {
             <div v-if="libraryStatus.scan.scanning" class="scan-status">
               <p>Scanning: {{ libraryStatus.scan.current }}</p>
               <ProgressBar
-                :value="(libraryStatus.scan.progress / libraryStatus.scan.total) * 100"
+                :value="Math.round((libraryStatus.scan.progress / libraryStatus.scan.total) * 100)"
                 :showValue="true"
               />
             </div>
