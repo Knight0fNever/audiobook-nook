@@ -112,9 +112,10 @@ function canImportVariant(variant) {
 /**
  * Ensure the whisper model file exists, download if missing
  * @param {string} modelName - Model name (e.g., 'base.en', 'small', 'medium')
+ * @param {function} onStatus - Optional status callback for progress reporting
  * @returns {string} Path to the model file
  */
-async function ensureModel(modelName) {
+async function ensureModel(modelName, onStatus = () => {}) {
   const modelsDir = config.transcription.modelsPath;
   if (!fs.existsSync(modelsDir)) {
     fs.mkdirSync(modelsDir, { recursive: true });
@@ -131,9 +132,11 @@ async function ensureModel(modelName) {
   // Download from Hugging Face
   const url = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${modelFile}`;
   console.log(`[Transcription] Downloading model ${modelName} from ${url}...`);
+  onStatus(`Downloading model "${modelName}"...`);
 
   await downloadFile(url, modelPath);
   console.log(`[Transcription] Model downloaded: ${modelPath}`);
+  onStatus('Model downloaded, loading...');
   return modelPath;
 }
 
@@ -141,37 +144,69 @@ async function ensureModel(modelName) {
  * Download a file from a URL to a local path (follows redirects)
  */
 function downloadFile(url, destPath) {
+  const TIMEOUT_MS = 120_000; // 2 minute timeout for connection/idle
+
   return new Promise((resolve, reject) => {
     const tmpPath = destPath + '.tmp';
     const file = fs.createWriteStream(tmpPath);
+    let settled = false;
+
+    function cleanup(err) {
+      if (settled) return;
+      settled = true;
+      file.close();
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      reject(err);
+    }
+
+    file.on('error', (err) => cleanup(err));
 
     function doRequest(requestUrl) {
-      https.get(requestUrl, (response) => {
+      const req = https.get(requestUrl, (response) => {
         // Follow redirects
         if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          file.close();
           doRequest(response.headers.location);
           return;
         }
 
         if (response.statusCode !== 200) {
-          file.close();
-          fs.unlinkSync(tmpPath);
-          reject(new Error(`Download failed with status ${response.statusCode}`));
+          cleanup(new Error(`Download failed with status ${response.statusCode}`));
           return;
         }
 
+        const totalBytes = parseInt(response.headers['content-length'], 10) || 0;
+        let downloadedBytes = 0;
+        let lastLogPercent = 0;
+
+        response.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+          if (totalBytes > 0) {
+            const percent = Math.floor((downloadedBytes / totalBytes) * 100);
+            if (percent >= lastLogPercent + 20) {
+              lastLogPercent = percent;
+              const mb = (downloadedBytes / 1024 / 1024).toFixed(1);
+              const totalMb = (totalBytes / 1024 / 1024).toFixed(1);
+              console.log(`[Transcription] Download progress: ${mb}MB / ${totalMb}MB (${percent}%)`);
+            }
+          }
+        });
+
         response.pipe(file);
         file.on('finish', () => {
+          if (settled) return;
+          settled = true;
           file.close();
           fs.renameSync(tmpPath, destPath);
           resolve();
         });
-      }).on('error', (err) => {
-        file.close();
-        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-        reject(err);
       });
+
+      req.setTimeout(TIMEOUT_MS, () => {
+        req.destroy();
+        cleanup(new Error(`Download timed out after ${TIMEOUT_MS / 1000}s`));
+      });
+
+      req.on('error', (err) => cleanup(err));
     }
 
     doRequest(url);
@@ -181,8 +216,9 @@ function downloadFile(url, destPath) {
 /**
  * Get or create a persistent whisper context
  * Reuses context across transcriptions to avoid reloading the model
+ * @param {function} onStatus - Optional status callback for progress reporting
  */
-async function getWhisperContext() {
+async function getWhisperContext(onStatus = () => {}) {
   const backend = detectBackend();
 
   const db = getDb();
@@ -205,13 +241,14 @@ async function getWhisperContext() {
     whisperContextModel = null;
   }
 
-  const modelPath = await ensureModel(modelName);
+  const modelPath = await ensureModel(modelName, onStatus);
 
   try {
+    onStatus('Loading model...');
     const { initWhisper } = await import('@fugood/whisper.node');
 
     const initOptions = {
-      model: modelPath,
+      filePath: modelPath,
       useGpu: backend.gpu
     };
 
@@ -226,9 +263,10 @@ async function getWhisperContext() {
     // If GPU failed, try CPU fallback
     if (backend.gpu) {
       console.log('[Transcription] Retrying with CPU fallback...');
+      onStatus('Retrying with CPU fallback...');
       try {
         const { initWhisper } = await import('@fugood/whisper.node');
-        whisperContext = await initWhisper({ model: modelPath, useGpu: false });
+        whisperContext = await initWhisper({ filePath: modelPath, useGpu: false });
         whisperContextModel = modelName;
         detectedBackend = { name: 'cpu', gpu: false, variant: null, reason: 'fallback after GPU failure' };
         console.log('[Transcription] CPU fallback successful');
@@ -269,7 +307,7 @@ export async function transcribeBook(bookId, onProgress = () => {}) {
 
   for (let i = 0; i < chapters.length; i++) {
     const chapter = chapters[i];
-    onProgress(Math.round((i / chapters.length) * 100));
+    onProgress(Math.round((i / chapters.length) * 100), `Transcribing chapter ${i + 1} of ${chapters.length}...`);
 
     // Check cache first
     const cached = db.prepare(`
@@ -284,7 +322,9 @@ export async function transcribeBook(bookId, onProgress = () => {}) {
       chapterTranscription = JSON.parse(cached.sentence_timestamps);
     } else {
       console.log(`[Transcription] Transcribing chapter ${chapter.order_index}...`);
-      chapterTranscription = await transcribeChapter(chapter.file_path);
+      chapterTranscription = await transcribeChapter(chapter.file_path, (msg) => {
+        onProgress(Math.round((i / chapters.length) * 100), msg);
+      });
 
       // Cache the transcription
       db.prepare(`
@@ -317,9 +357,10 @@ export async function transcribeBook(bookId, onProgress = () => {}) {
 /**
  * Transcribe a single audio file using Whisper
  * @param {string} audioPath - Path to audio file
+ * @param {function} onStatus - Optional status callback for progress reporting
  * @returns {Object} Transcription with sentence timestamps
  */
-async function transcribeChapter(audioPath) {
+async function transcribeChapter(audioPath, onStatus = () => {}) {
   if (!fs.existsSync(audioPath)) {
     throw new Error(`Audio file not found: ${audioPath}`);
   }
@@ -327,7 +368,7 @@ async function transcribeChapter(audioPath) {
   // Try to get whisper context
   let context;
   try {
-    context = await getWhisperContext();
+    context = await getWhisperContext(onStatus);
   } catch (error) {
     console.error('[Transcription] Error getting whisper context:', error.message);
     context = null;
